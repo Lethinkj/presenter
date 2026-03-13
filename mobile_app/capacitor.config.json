@@ -1,0 +1,13 @@
+{
+  "appId": "com.worshipcast.app",
+  "appName": "WorshipCast",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true,
+    "allowNavigation": [
+      "192.168.1.35",
+      "*"
+    ]
+  }
+}

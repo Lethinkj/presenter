@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorshipCast - TV Display</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Lato:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&family=Roboto+Slab:wght@400;700&display=swap" rel="stylesheet" />
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            color: #fff;
+            /* Default font, will be overridden */
+            font-family: 'Inter', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        #lyrics-container {
+            width: 90%;
+            height: 90%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        .lyric-line {
+            font-size: 8vw; /* Large fluid typography for TV */
+            font-weight: bold;
+            line-height: 1.4;
+            text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.8);
+            margin-bottom: 2vh;
+            /* Simple fade in animation */
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        #status {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="lyrics-container">
+        <!-- Lyrics will be injected here -->
+        <div class="lyric-line" style="color: #666; font-size: 4vw;">Waiting for presentation...</div>
+        <div id="room-code-display" style="color: #444; font-size: 3vw; margin-top: 20px;">Room Code: <span id="room-code-val">...</span></div>
+    </div>
+
+    <div id="status">Connecting...</div>
+
+    <script>
+        const lyricsContainer = document.getElementById('lyrics-container');
+        const statusElement = document.getElementById('status');
+
+        // Connect to the WebSocket server running on the same host and port
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        // When running locally, often the TV is on another device on the network,
+        // so we need the actual IP instead of localhost. But for the initial connection let's use the host.
+        const wsUrl = `${protocol}//${window.location.host}`;
+        
+        // For development outside the browser serving it, you might need to hardcode the IP:
+        // const wsUrl = 'ws://YOUR_LOCAL_IP:3000';
+
+        // Extract room ID from URL query params
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = urlParams.get('room') || 'default';
+        document.getElementById('room-code-val').innerText = roomId;
+
+        let ws;
+
+        function connectWebSocket() {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('Connected to WebSocket server');
+                statusElement.innerText = 'Connected to Room: ' + roomId;
+                statusElement.style.color = 'rgba(0, 255, 0, 0.5)';
+                
+                // Join room
+                ws.send(JSON.stringify({ type: 'join', room: roomId }));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received message:', data);
+
+                if (data.type === 'present') {
+                    // Hide the room code display once presentation starts
+                    const roomDisplay = document.getElementById('room-code-display');
+                    if (roomDisplay) roomDisplay.style.display = 'none';
+                    
+                    // Apply font if sent
+                    if (data.font) {
+                        lyricsContainer.style.fontFamily = data.font;
+                    }
+
+                    displayLyrics(data.text, data.fontSize);
+                } else if (data.type === 'clear') {
+                    lyricsContainer.innerHTML = '';
+                    // Optionally show room code again
+                    const div = document.createElement('div');
+                    div.id = 'room-code-display';
+                    div.style.color = '#444';
+                    div.style.fontSize = '3vw';
+                    div.style.marginTop = '20px';
+                    div.innerHTML = `Room Code: <span id="room-code-val">${roomId}</span>`;
+                    lyricsContainer.appendChild(div);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected. Attempting to reconnect...');
+                statusElement.innerText = 'Disconnected - Reconnecting...';
+                statusElement.style.color = 'rgba(255, 0, 0, 0.5)';
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+        }
+
+        let currentElements = [];
+        let currentFontSizeType = 'auto';
+
+        function displayLyrics(text, fontSize) {
+            lyricsContainer.innerHTML = '';
+            currentElements = [];
+            currentFontSizeType = fontSize || 'auto';
+            
+            // Split by newline and create div elements
+            const lines = text.split('\n');
+            lines.forEach(line => {
+                if (line.trim() !== '') {
+                    const div = document.createElement('div');
+                    div.className = 'lyric-line';
+                    div.innerText = line;
+                    lyricsContainer.appendChild(div);
+                    currentElements.push(div);
+                } else {
+                    // Add some spacing for blank lines within a stanza
+                    const spacer = document.createElement('div');
+                    spacer.style.height = '4vh';
+                    lyricsContainer.appendChild(spacer);
+                }
+            });
+
+            applyFontSize();
+        }
+
+        function applyFontSize() {
+            if (currentElements.length === 0) return;
+
+            if (currentFontSizeType === 'auto') {
+                autoFit(currentElements);
+            } else {
+                // Fixed size (e.g. 8vw)
+                currentElements.forEach(el => el.style.fontSize = currentFontSizeType + 'vw');
+            }
+        }
+
+        function autoFit(elements) {
+            let size = 12; // Start large (12vw)
+            const minSize = 2; // Minimum 2vw
+
+            // Temporarily hide overflow to measure properly without causing layout thrashing loops
+            lyricsContainer.style.overflow = 'hidden';
+
+            elements.forEach(el => el.style.fontSize = size + 'vw');
+            
+            // Allow 5% margin
+            const maxH = window.innerHeight * 0.9;
+            const maxW = window.innerWidth * 0.95;
+
+            // Reduce font size until it fits
+            while ((lyricsContainer.scrollHeight > maxH || lyricsContainer.scrollWidth > maxW) && size > minSize) {
+                size -= 0.5;
+                elements.forEach(el => el.style.fontSize = size + 'vw');
+            }
+        }
+
+        // Re-calculate font on window resize
+        window.addEventListener('resize', () => {
+            if (currentFontSizeType === 'auto') {
+                applyFontSize();
+            }
+        });
+
+        // Initialize connection
+        connectWebSocket();
+    </script>
+</body>
+</html>
