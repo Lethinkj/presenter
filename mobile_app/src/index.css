@@ -371,6 +371,67 @@ body {
   transition: background 0.2s;
 }
 .icon-btn:hover { background: var(--primary-color); }
+.icon-btn.active {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.song-edit-panel {
+  background: var(--surface-color);
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 16px;
+}
+
+.song-edit-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.song-edit-actions .btn-cancel,
+.song-edit-actions .btn-save {
+  padding: 10px 12px;
+  margin-top: 0;
+  flex: unset;
+}
+
+.web-save-btn {
+  margin-right: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--primary-color);
+  color: white;
+  background: var(--primary-color);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+}
+
+.web-save-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.web-save-current-btn {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--primary-color);
+  background: rgba(98, 0, 234, 0.2);
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.web-save-current-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
 
 /* Add Song button next to search */
 .add-btn {

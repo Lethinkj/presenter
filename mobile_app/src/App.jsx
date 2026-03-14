@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
-import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi } from 'react-icons/fa';
+import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes } from 'react-icons/fa';
 
 // Supabase
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvwjzkoia.supabase.co';
@@ -17,9 +17,22 @@ const PROD_WS = import.meta.env.VITE_WS_URL;
 // Automatically detect the host IP address for local fallback
 const host = window.location.hostname || '192.168.1.35';
 const SERVER_IP = (host === 'localhost' || host === '127.0.0.1') ? '192.168.1.35' : host;
+const API_BASE_NORMALIZED = PROD_URL ? PROD_URL.replace(/\/+$/, '') : null;
 
-export const API_BASE = PROD_URL || `http://${SERVER_IP}:3000`;
-export const WS_URL = PROD_WS || `ws://${SERVER_IP}:3000`;
+const normalizeWsUrl = (url) => {
+  if (!url) return url;
+  const apiIsHttps = !!API_BASE_NORMALIZED && API_BASE_NORMALIZED.startsWith('https://');
+  const securePage = window.location.protocol === 'https:';
+  if ((apiIsHttps || securePage) && url.startsWith('ws://')) {
+    return `wss://${url.slice(5)}`;
+  }
+  return url;
+};
+
+export const API_BASE = API_BASE_NORMALIZED || `http://${SERVER_IP}:3000`;
+export const WS_URL = normalizeWsUrl(
+  PROD_WS || (API_BASE_NORMALIZED ? API_BASE_NORMALIZED.replace(/^http/, 'ws') : `ws://${SERVER_IP}:3000`)
+);
 
 const FONTS = [
   { label: 'Default', value: "'Inter', sans-serif" },
@@ -40,7 +53,14 @@ function App() {
   // Presentation
   const [selectedSong, setSelectedSong] = useState(null);
   const [ws, setWs] = useState(null);
+  const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
   const [activeStanza, setActiveStanza] = useState(null);
+  const [isEditingSong, setIsEditingSong] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editableStanzas, setEditableStanzas] = useState([]);
+  const [savingEdits, setSavingEdits] = useState(false);
+  const [savingWebSongs, setSavingWebSongs] = useState({});
 
   // Room
   const [roomCode, setRoomCode] = useState(() => {
@@ -98,11 +118,49 @@ function App() {
 
   // WebSocket
   useEffect(() => {
-    const socket = new WebSocket(WS_URL);
-    socket.onopen = () => { socket.send(JSON.stringify({ type: 'join', room: roomCode })); };
-    socket.onclose = () => console.log('WS disconnected');
-    setWs(socket);
-    return () => socket.close();
+    let isDisposed = false;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+
+    const connect = () => {
+      if (isDisposed) return;
+
+      const socket = new WebSocket(WS_URL);
+      wsRef.current = socket;
+      setWs(socket);
+
+      socket.onopen = () => {
+        clearReconnectTimer();
+        socket.send(JSON.stringify({ type: 'join', room: roomCode }));
+      };
+
+      socket.onclose = () => {
+        if (isDisposed) return;
+        reconnectTimerRef.current = setTimeout(connect, 1500);
+      };
+
+      socket.onerror = () => {
+        // Close and trigger reconnect via onclose.
+        try { socket.close(); } catch { /* no-op */ }
+      };
+    };
+
+    connect();
+
+    return () => {
+      isDisposed = true;
+      clearReconnectTimer();
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch { /* no-op */ }
+      }
+      wsRef.current = null;
+      setWs(null);
+    };
   }, [roomCode]);
 
   // ---- Search ----
@@ -185,10 +243,109 @@ function App() {
     } finally { setLoading(false); }
   };
 
+  useEffect(() => {
+    if (!selectedSong) {
+      setIsEditingSong(false);
+      setEditTitle('');
+      setEditableStanzas([]);
+      return;
+    }
+    setIsEditingSong(false);
+    setEditTitle(selectedSong.title || '');
+    setEditableStanzas(Array.isArray(selectedSong.stanzas) ? [...selectedSong.stanzas] : []);
+  }, [selectedSong]);
+
+  const updateEditableStanza = (index, value) => {
+    setEditableStanzas(prev => prev.map((item, i) => (i === index ? value : item)));
+  };
+
+  const addEditableStanza = () => setEditableStanzas(prev => [...prev, '']);
+  const removeEditableStanza = (index) => setEditableStanzas(prev => prev.filter((_, i) => i !== index));
+
+  const saveEditedSongToDb = async () => {
+    if (!selectedSong) return;
+
+    const cleanTitle = editTitle.trim();
+    const cleanStanzas = editableStanzas.map(s => s.trim()).filter(Boolean);
+
+    if (!cleanTitle) {
+      alert('Title is required.');
+      return;
+    }
+    if (cleanStanzas.length === 0) {
+      alert('At least one stanza is required.');
+      return;
+    }
+
+    setSavingEdits(true);
+    try {
+      const payload = {
+        title: cleanTitle,
+        stanzas: cleanStanzas,
+        forceUpdate: true,
+        sourceUrl: selectedSong.url || null
+      };
+      if (selectedSong.id) payload.songId = selectedSong.id;
+
+      const res = await axios.post(`${API_BASE}/save_song`, payload);
+      const persistedId = res.data.songId || selectedSong.id;
+
+      setSelectedSong(prev => ({
+        ...(prev || {}),
+        id: persistedId,
+        title: cleanTitle,
+        stanzas: cleanStanzas,
+        isCached: true
+      }));
+
+      if (persistedId) {
+        setOfflineCache(prev => ({
+          ...prev,
+          [persistedId]: { id: persistedId, title: cleanTitle, stanzas: cleanStanzas, source: 'db' }
+        }));
+      }
+
+      setIsEditingSong(false);
+      alert('Song saved to database.');
+    } catch (err) {
+      alert('Failed to save edits: ' + (err.response?.data?.details || err.message));
+    } finally {
+      setSavingEdits(false);
+    }
+  };
+
+  const handleSaveWebResultToDb = async (songItem) => {
+    const saveKey = songItem.url || songItem.title;
+    setSavingWebSongs(prev => ({ ...prev, [saveKey]: true }));
+
+    try {
+      const lyricRes = await axios.get(`${API_BASE}/lyrics?url=${encodeURIComponent(songItem.url)}`);
+      const stanzas = (lyricRes.data || []).map(s => String(s || '').trim()).filter(Boolean);
+      if (stanzas.length === 0) throw new Error('No stanzas found to save');
+
+      const saveRes = await axios.post(`${API_BASE}/save_song`, {
+        title: songItem.title,
+        stanzas,
+        sourceUrl: songItem.url
+      });
+
+      const newId = saveRes.data.songId;
+      if (newId) {
+        setOfflineCache(prev => ({ ...prev, [newId]: { id: newId, title: songItem.title, stanzas, source: 'db' } }));
+      }
+      alert(`Saved "${songItem.title}" to DB.`);
+    } catch (err) {
+      alert('Save to DB failed: ' + (err.response?.data?.details || err.message));
+    } finally {
+      setSavingWebSongs(prev => ({ ...prev, [saveKey]: false }));
+    }
+  };
+
   // ---- Present / Clear ----
   const presentLyrics = async (stanzaText, stanzaIndex) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'present', text: stanzaText, room: roomCode, font: displayFont, fontSize: displayFontSize }));
+    const socket = wsRef.current || ws;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'present', text: stanzaText, room: roomCode, font: displayFont, fontSize: displayFontSize }));
       setActiveStanza(stanzaIndex);
     } else {
       alert('WebSocket not connected. TV may not update.');
@@ -205,16 +362,16 @@ function App() {
   };
 
   const clearScreen = () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'clear', room: roomCode }));
+    const socket = wsRef.current || ws;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'clear', room: roomCode }));
       setActiveStanza(null);
     }
   };
 
   // ---- Share Link ----
   const handleShareLink = () => {
-    const host = window.location.hostname;
-    const tvUrl = `http://${host}:3000/tv.html?room=${roomCode}`;
+    const tvUrl = `${API_BASE}/tv.html?room=${roomCode}`;
     navigator.clipboard.writeText(tvUrl).then(() => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
@@ -267,6 +424,9 @@ function App() {
 
   // ---- Presentation View ----
   if (selectedSong) {
+    const displayStanzas = isEditingSong ? editableStanzas : selectedSong.stanzas;
+    const selectedSongSaveKey = selectedSong.url || selectedSong.title;
+
     return (
       <div className="app-container" style={{ fontFamily: displayFont }}>
         <div className="app-header presentation-header">
@@ -274,10 +434,37 @@ function App() {
             <FaArrowLeft />
           </button>
           <h1 style={{ flex: 1, textAlign: 'left', fontSize: '1.1rem', margin: 0 }}>{selectedSong.title}</h1>
+          <button className={`icon-btn ${isEditingSong ? 'active' : ''}`} title="Edit Song" onClick={() => setIsEditingSong(v => !v)}>
+            <FaEdit />
+          </button>
           <button className="icon-btn" title="Change Font" onClick={() => setShowFontPicker(f => !f)}>
             <FaFont />
           </button>
         </div>
+
+        {isEditingSong && (
+          <div className="song-edit-panel">
+            <input
+              className="modal-input"
+              placeholder="Song Title"
+              value={editTitle}
+              onChange={e => setEditTitle(e.target.value)}
+            />
+            <div className="song-edit-actions">
+              <button className="add-stanza-btn" onClick={addEditableStanza}>+ Add Stanza</button>
+              <button className="btn-cancel" onClick={() => {
+                setIsEditingSong(false);
+                setEditTitle(selectedSong.title || '');
+                setEditableStanzas([...(selectedSong.stanzas || [])]);
+              }}>
+                <FaTimes style={{ marginRight: 6 }} /> Cancel
+              </button>
+              <button className="btn-save" onClick={saveEditedSongToDb} disabled={savingEdits}>
+                <FaSave style={{ marginRight: 6 }} /> {savingEdits ? 'Saving...' : 'Save To DB'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {showFontPicker && (
           <div className="font-picker-container">
@@ -301,9 +488,33 @@ function App() {
         )}
 
         <div className="content-area">
-          {selectedSong.stanzas.map((stanza, i) => (
+          {!selectedSong.isCached && (
+            <button
+              className="web-save-current-btn"
+              onClick={() => handleSaveWebResultToDb({ title: selectedSong.title, url: selectedSong.url })}
+              disabled={!!savingWebSongs[selectedSongSaveKey]}
+            >
+              <FaSave style={{ marginRight: 6 }} /> {savingWebSongs[selectedSongSaveKey] ? 'Saving...' : 'Save This Song To DB'}
+            </button>
+          )}
+
+          {displayStanzas.map((stanza, i) => (
             <div key={i} className="stanza-card">
-              <pre className="stanza-text" style={{ fontFamily: displayFont }}>{stanza}</pre>
+              {isEditingSong ? (
+                <div className="stanza-row">
+                  <textarea
+                    className="stanza-textarea"
+                    rows={4}
+                    value={stanza}
+                    onChange={e => updateEditableStanza(i, e.target.value)}
+                  />
+                  {displayStanzas.length > 1 && (
+                    <button className="remove-stanza" onClick={() => removeEditableStanza(i)}>✕</button>
+                  )}
+                </div>
+              ) : (
+                <pre className="stanza-text" style={{ fontFamily: displayFont }}>{stanza}</pre>
+              )}
               <button
                 className={`present-btn ${activeStanza === i ? 'active' : ''}`}
                 onClick={() => presentLyrics(stanza, i)}
@@ -402,6 +613,18 @@ function App() {
                       {isCached && item.source === 'db' && ' • ⚡ Cached'}
                     </span>
                   </div>
+                  {item.source === 'web' && (
+                    <button
+                      className="web-save-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSaveWebResultToDb(item);
+                      }}
+                      disabled={!!savingWebSongs[item.url || item.title]}
+                    >
+                      <FaSave style={{ marginRight: 6 }} /> {savingWebSongs[item.url || item.title] ? 'Saving...' : 'Save DB'}
+                    </button>
+                  )}
                   <button className="fav-btn" onClick={e => toggleFavorite(e, item)}>
                     {isFav ? <FaStar color="#f5b041" size={18} /> : <FaRegStar color="#666" size={18} />}
                   </button>

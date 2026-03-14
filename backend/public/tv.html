@@ -93,6 +93,7 @@
 
             ws.onopen = () => {
                 console.log('Connected to WebSocket server');
+                // Hide reconnecting status if any
                 statusElement.innerText = 'Connected to Room: ' + roomId;
                 statusElement.style.color = 'rgba(0, 255, 0, 0.5)';
                 
@@ -108,6 +109,7 @@
                     // Hide the room code display once presentation starts
                     const roomDisplay = document.getElementById('room-code-display');
                     if (roomDisplay) roomDisplay.style.display = 'none';
+                    statusElement.style.display = 'none'; // Also hide the connected status text to be clean
                     
                     // Apply font if sent
                     if (data.font) {
@@ -117,7 +119,7 @@
                     displayLyrics(data.text, data.fontSize);
                 } else if (data.type === 'clear') {
                     lyricsContainer.innerHTML = '';
-                    // Optionally show room code again
+                    // Show room code again
                     const div = document.createElement('div');
                     div.id = 'room-code-display';
                     div.style.color = '#444';
@@ -125,11 +127,15 @@
                     div.style.marginTop = '20px';
                     div.innerHTML = `Room Code: <span id="room-code-val">${roomId}</span>`;
                     lyricsContainer.appendChild(div);
+                    statusElement.style.display = 'block'; // Show status again
+                } else if (data.type === 'status' || data.type === 'error') {
+                    console.log('Server message:', data.message);
                 }
             };
 
             ws.onclose = () => {
                 console.log('WebSocket disconnected. Attempting to reconnect...');
+                statusElement.style.display = 'block';
                 statusElement.innerText = 'Disconnected - Reconnecting...';
                 statusElement.style.color = 'rgba(255, 0, 0, 0.5)';
                 setTimeout(connectWebSocket, 3000);

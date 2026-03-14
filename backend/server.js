@@ -55,42 +55,28 @@ app.get('/lyrics', async (req, res) => {
 
 // --- REST API for Auto Save ---
 app.post('/save_song', async (req, res) => {
-    const { title, stanzas } = req.body;
+    const { title, stanzas, songId, sourceUrl, forceUpdate } = req.body;
     
     if (!title || !stanzas || !Array.isArray(stanzas)) {
         return res.status(400).json({ error: "Invalid payload. Required: title (string), stanzas (array of strings)" });
     }
 
+    const cleanStanzas = stanzas.map(s => String(s || '').trim()).filter(Boolean);
+    if (cleanStanzas.length === 0) {
+        return res.status(400).json({ error: 'At least one non-empty stanza is required' });
+    }
+
     try {
-        // 1. Check if song already exists
-        const { data: existingSong, error: searchError } = await supabase
-            .from('songs')
-            .select('id')
-            .ilike('title', title)
-            .limit(1)
-            .single();
+        const updateLyricsForSong = async (targetSongId) => {
+            const { error: deleteLyricsError } = await supabase
+                .from('lyrics')
+                .delete()
+                .eq('song_id', targetSongId);
 
-        let songId;
+            if (deleteLyricsError) throw deleteLyricsError;
 
-        if (existingSong) {
-            songId = existingSong.id;
-            console.log(`Song "${title}" already exists in DB with ID: ${songId}`);
-            return res.json({ message: "Song already exists", songId });
-        } else {
-            // 2. Insert new song
-            const { data: newSong, error: insertSongError } = await supabase
-                .from('songs')
-                .insert([{ title }])
-                .select()
-                .single();
-
-            if (insertSongError) throw insertSongError;
-            songId = newSong.id;
-            console.log(`Inserted new song "${title}" with ID: ${songId}`);
-
-            // 3. Insert lyrics stanzas
-            const lyricsData = stanzas.map((stanza, index) => ({
-                song_id: songId,
+            const lyricsData = cleanStanzas.map((stanza, index) => ({
+                song_id: targetSongId,
                 stanza_number: index + 1,
                 lyrics: stanza
             }));
@@ -100,9 +86,78 @@ app.post('/save_song', async (req, res) => {
                 .insert(lyricsData);
 
             if (insertLyricsError) throw insertLyricsError;
+            return lyricsData.length;
+        };
+
+        // Explicit update path from presentation editor
+        if (songId && forceUpdate) {
+            const updatePayload = { title };
+            if (sourceUrl) updatePayload.source_url = sourceUrl;
+
+            const { error: updateSongError } = await supabase
+                .from('songs')
+                .update(updatePayload)
+                .eq('id', songId);
+
+            if (updateSongError) throw updateSongError;
+
+            const savedCount = await updateLyricsForSong(songId);
+            return res.json({ message: 'Song updated successfully', songId, updated: true, savedStanzas: savedCount });
+        }
+
+        // 1. Check if song already exists
+        const { data: existingSong, error: searchError } = await supabase
+            .from('songs')
+            .select('id')
+            .ilike('title', title)
+            .limit(1)
+            .single();
+
+        if (searchError && searchError.code !== 'PGRST116') {
+            throw searchError;
+        }
+
+        let resolvedSongId;
+
+        if (existingSong) {
+            resolvedSongId = existingSong.id;
+
+            if (forceUpdate) {
+                const updatePayload = { title };
+                if (sourceUrl) updatePayload.source_url = sourceUrl;
+
+                const { error: updateSongError } = await supabase
+                    .from('songs')
+                    .update(updatePayload)
+                    .eq('id', resolvedSongId);
+
+                if (updateSongError) throw updateSongError;
+
+                const savedCount = await updateLyricsForSong(resolvedSongId);
+                return res.json({ message: 'Song updated successfully', songId: resolvedSongId, updated: true, savedStanzas: savedCount });
+            }
+
+            console.log(`Song "${title}" already exists in DB with ID: ${resolvedSongId}`);
+            return res.json({ message: "Song already exists", songId: resolvedSongId, updated: false });
+        } else {
+            // 2. Insert new song
+            const insertPayload = { title };
+            if (sourceUrl) insertPayload.source_url = sourceUrl;
+
+            const { data: newSong, error: insertSongError } = await supabase
+                .from('songs')
+                .insert([insertPayload])
+                .select()
+                .single();
+
+            if (insertSongError) throw insertSongError;
+            resolvedSongId = newSong.id;
+            console.log(`Inserted new song "${title}" with ID: ${resolvedSongId}`);
+
+            const savedCount = await updateLyricsForSong(resolvedSongId);
             
-            console.log(`Saved ${lyricsData.length} stanzas for song ID: ${songId}`);
-            res.json({ message: "Song saved successfully", songId });
+            console.log(`Saved ${savedCount} stanzas for song ID: ${resolvedSongId}`);
+            res.json({ message: "Song saved successfully", songId: resolvedSongId, updated: false, savedStanzas: savedCount });
         }
     } catch (error) {
         console.error("Error saving song:", error);

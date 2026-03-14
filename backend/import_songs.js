@@ -21,6 +21,8 @@ const BASE_URL = 'https://www.christsquare.com';
 const HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
 const DELAY_MS = 1000;       // 1 second between requests (be respectful to the server)
 const BATCH_SIZE = 50;       // Songs per batch before pausing
+const MAX_RETRIES = Number(process.env.IMPORT_MAX_RETRIES || 3);
+const RETRY_BASE_MS = Number(process.env.IMPORT_RETRY_BASE_MS || 1500);
 const PROGRESS_FILE = 'import_progress.json';
 const SITEMAP_URL = `${BASE_URL}/sitemap.xml`;
 
@@ -34,9 +36,31 @@ const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
 function loadProgress() {
     if (fs.existsSync(PROGRESS_FILE)) {
-        return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
+        const parsed = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
+        return {
+            done: parsed.done || [],
+            failed: parsed.failed || []
+        };
     }
     return { done: [], failed: [] };
+}
+
+async function withRetries(fn, label) {
+    let lastError;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            return await fn();
+        } catch (err) {
+            lastError = err;
+            const status = err?.response?.status;
+            const canRetry = attempt < MAX_RETRIES && (!status || status >= 500 || status === 429);
+            if (!canRetry) break;
+            const waitMs = RETRY_BASE_MS * attempt;
+            process.stdout.write(`(retry ${attempt}/${MAX_RETRIES - 1} in ${waitMs}ms) `);
+            await sleep(waitMs);
+        }
+    }
+    throw new Error(`${label}: ${lastError?.message || 'Unknown error'}`);
 }
 
 function saveProgress(progress) {
@@ -45,7 +69,10 @@ function saveProgress(progress) {
 
 async function getAllSongUrls() {
     console.log('[import] Fetching sitemap...');
-    const { data } = await axios.get(SITEMAP_URL, { headers: HEADERS });
+    const { data } = await withRetries(
+        () => axios.get(SITEMAP_URL, { headers: HEADERS, timeout: 15000 }),
+        'Sitemap fetch failed'
+    );
     
     // Extract all loc tags
     const locRegex = /<loc>(.*?)<\/loc>/g;
@@ -62,7 +89,10 @@ async function getAllSongUrls() {
 }
 
 async function fetchLyricsFromPage(url) {
-    const { data } = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const { data } = await withRetries(
+        () => axios.get(url, { headers: HEADERS, timeout: 12000 }),
+        'Lyrics fetch failed'
+    );
     const $ = cheerio.load(data);
 
     // Extract song title from h1
@@ -109,12 +139,16 @@ async function fetchLyricsFromPage(url) {
 
 async function saveSongToDb(title, stanzas, url) {
     // Check if already exists
-    const { data: existing } = await supabase
+    const { data: existing, error: existingErr } = await supabase
         .from('songs')
         .select('id')
         .ilike('title', title)
         .limit(1)
         .single();
+
+    if (existingErr && existingErr.code !== 'PGRST116') {
+        throw new Error(`Song lookup failed: ${existingErr.message}`);
+    }
 
     if (existing) {
         return { skipped: true, id: existing.id };
@@ -153,6 +187,8 @@ async function main() {
 
     let inserted = 0, skipped = 0, failed = 0;
 
+    const failedSet = new Set(progress.failed);
+
     for (let i = 0; i < remaining.length; i++) {
         const url = remaining[i];
         process.stdout.write(`[${i + 1}/${remaining.length}] ${url.split('/').slice(-2, -1)[0]} ... `);
@@ -174,11 +210,14 @@ async function main() {
                 }
             }
             progress.done.push(url);
+            failedSet.delete(url);
         } catch (err) {
             process.stdout.write(`❌ Error: ${err.message}\n`);
-            progress.failed.push(url);
+            failedSet.add(url);
             failed++;
         }
+
+        progress.failed = Array.from(failedSet);
 
         saveProgress(progress);
         await sleep(DELAY_MS);
@@ -194,6 +233,9 @@ async function main() {
     console.log(`Skipped:  ${skipped}`);
     console.log(`Failed:   ${failed}`);
     console.log(`Progress saved to: ${PROGRESS_FILE}`);
+
+    // Exit successfully for one-off job platforms (Render cron/job) once loop completes.
+    process.exit(0);
 }
 
 main().catch(err => {
