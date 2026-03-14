@@ -16,9 +16,58 @@ app.use(express.json());
 app.use(express.static('public')); // Serve TV display frontend
 
 // Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL || 'https://xxxxxxxxxxxxxxxxxxxx.supabase.co';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
+const cleanEnv = (value) => String(value || '').trim().replace(/^['\"]|['\"]$/g, '');
+const supabaseUrl = cleanEnv(process.env.SUPABASE_URL);
+const supabaseKey = cleanEnv(process.env.SUPABASE_ANON_KEY);
+
+const isValidSupabaseUrl = (value) => {
+    try {
+        const parsed = new URL(value);
+        return parsed.protocol === 'https:' && /\.supabase\.co$/i.test(parsed.hostname);
+    } catch {
+        return false;
+    }
+};
+
+if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Missing SUPABASE_URL or SUPABASE_ANON_KEY in backend/.env');
+}
+
+if (!isValidSupabaseUrl(supabaseUrl)) {
+    throw new Error(`Invalid SUPABASE_URL in backend/.env: ${supabaseUrl}`);
+}
+
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+const isTransientNetworkError = (err) => {
+    const text = `${err?.message || ''} ${err?.details || ''}`.toLowerCase();
+    return (
+        text.includes('fetch failed') ||
+        text.includes('enotfound') ||
+        text.includes('eai_again') ||
+        text.includes('econnreset') ||
+        text.includes('etimedout') ||
+        text.includes('network')
+    );
+};
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withRetry = async (operation, retries = 2) => {
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await operation();
+        } catch (err) {
+            lastError = err;
+            if (!isTransientNetworkError(err) || attempt === retries) {
+                throw err;
+            }
+            await delay(400 * (attempt + 1));
+        }
+    }
+    throw lastError;
+};
 
 // --- REST API for Web Search ---
 
@@ -76,18 +125,18 @@ app.post('/save_song', async (req, res) => {
 
         const safeUpdateSong = async (id, payload) => {
             let updatePayload = { ...payload };
-            let result = await supabase
+            let result = await withRetry(async () => supabase
                 .from('songs')
                 .update(updatePayload)
-                .eq('id', id);
+                .eq('id', id));
 
             if (result.error && isSourceUrlColumnError(result.error) && 'source_url' in updatePayload) {
                 // Schema may not have source_url yet; retry without it.
                 delete updatePayload.source_url;
-                result = await supabase
+                result = await withRetry(async () => supabase
                     .from('songs')
                     .update(updatePayload)
-                    .eq('id', id);
+                    .eq('id', id));
             }
 
             if (result.error) throw result.error;
@@ -95,20 +144,20 @@ app.post('/save_song', async (req, res) => {
 
         const safeInsertSong = async (payload) => {
             let insertPayload = { ...payload };
-            let result = await supabase
+            let result = await withRetry(async () => supabase
                 .from('songs')
                 .insert([insertPayload])
                 .select()
-                .single();
+                .single());
 
             if (result.error && isSourceUrlColumnError(result.error) && 'source_url' in insertPayload) {
                 // Schema may not have source_url yet; retry without it.
                 delete insertPayload.source_url;
-                result = await supabase
+                result = await withRetry(async () => supabase
                     .from('songs')
                     .insert([insertPayload])
                     .select()
-                    .single();
+                    .single());
             }
 
             if (result.error) throw result.error;
@@ -116,10 +165,10 @@ app.post('/save_song', async (req, res) => {
         };
 
         const updateLyricsForSong = async (targetSongId) => {
-            const { error: deleteLyricsError } = await supabase
+            const { error: deleteLyricsError } = await withRetry(async () => supabase
                 .from('lyrics')
                 .delete()
-                .eq('song_id', targetSongId);
+                .eq('song_id', targetSongId));
 
             if (deleteLyricsError) throw deleteLyricsError;
 
@@ -129,9 +178,9 @@ app.post('/save_song', async (req, res) => {
                 lyrics: stanza
             }));
 
-            const { error: insertLyricsError } = await supabase
+            const { error: insertLyricsError } = await withRetry(async () => supabase
                 .from('lyrics')
-                .insert(lyricsData);
+                .insert(lyricsData));
 
             if (insertLyricsError) throw insertLyricsError;
             return lyricsData.length;
@@ -149,12 +198,12 @@ app.post('/save_song', async (req, res) => {
         }
 
         // 1. Check if song already exists
-        const { data: existingSong, error: searchError } = await supabase
+        const { data: existingSong, error: searchError } = await withRetry(async () => supabase
             .from('songs')
             .select('id')
             .ilike('title', title)
             .limit(1)
-            .single();
+            .single());
 
         if (searchError && searchError.code !== 'PGRST116') {
             throw searchError;
@@ -193,7 +242,12 @@ app.post('/save_song', async (req, res) => {
         }
     } catch (error) {
         console.error("Error saving song:", error);
-        res.status(500).json({ error: "Failed to save song", details: error.message });
+        const details = `${error?.message || ''} ${error?.details || ''}`;
+        const hasDnsIssue = /enotfound|eai_again|getaddrinfo/i.test(details);
+        const hint = hasDnsIssue
+            ? 'Supabase hostname could not be resolved. Verify SUPABASE_URL in backend/.env, internet DNS access, and that the server can reach supabase.co.'
+            : '';
+        res.status(500).json({ error: "Failed to save song", details: error.message, hint });
     }
 });
 
