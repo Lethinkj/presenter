@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash } from 'react-icons/fa';
+import { App as CapacitorApp } from '@capacitor/app';
 
 // Supabase
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvwjzkoia.supabase.co';
@@ -101,6 +102,7 @@ function App() {
   const staleCheckIntervalRef = useRef(null);
   const lastPongAtRef = useRef(Date.now());
   const reconnectDelayRef = useRef(1500);
+  const ensureConnectedRef = useRef(() => {});
   const [activeStanza, setActiveStanza] = useState(null);
   const [isEditingSong, setIsEditingSong] = useState(false);
   const [editTitle, setEditTitle] = useState('');
@@ -304,6 +306,7 @@ function App() {
       clearReconnectTimer();
       connect();
     };
+    ensureConnectedRef.current = ensureConnected;
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
@@ -322,6 +325,7 @@ function App() {
 
     return () => {
       isDisposed = true;
+      ensureConnectedRef.current = () => {};
       clearHeartbeat();
       clearReconnectTimer();
       document.removeEventListener('visibilitychange', onVisible);
@@ -336,24 +340,65 @@ function App() {
     };
   }, []);
 
+  const handleInternalBack = () => {
+    if (selectedSong) {
+      setSelectedSong(null);
+      setActiveStanza(null);
+      return true;
+    }
+    if (showSettings) {
+      setShowSettings(false);
+      return true;
+    }
+    return false;
+  };
+
   // In-app back stack: close song/settings on browser/mobile back before exiting app.
   useEffect(() => {
     const onPopState = () => {
-      if (selectedSong) {
-        setSelectedSong(null);
-        setActiveStanza(null);
-        return;
-      }
-      if (showSettings) {
-        setShowSettings(false);
-      }
+      handleInternalBack();
     };
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, [selectedSong, showSettings]);
 
+  useEffect(() => {
+    const onCordovaBack = (event) => {
+      if (handleInternalBack()) {
+        event.preventDefault();
+      }
+    };
+
+    document.addEventListener('backbutton', onCordovaBack, false);
+
+    let removeBackButtonListener;
+    let removeAppStateListener;
+
+    CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+      if (handleInternalBack()) return;
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        CapacitorApp.minimizeApp();
+      }
+    }).then(h => { removeBackButtonListener = h; }).catch(() => {});
+
+    CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) {
+        ensureConnectedRef.current();
+      }
+    }).then(h => { removeAppStateListener = h; }).catch(() => {});
+
+    return () => {
+      document.removeEventListener('backbutton', onCordovaBack, false);
+      if (removeBackButtonListener) removeBackButtonListener.remove();
+      if (removeAppStateListener) removeAppStateListener.remove();
+    };
+  }, [selectedSong, showSettings]);
+
   const openSettingsPage = () => {
+    if (showSettings) return;
     setShowSettings(true);
     window.history.pushState({ appView: 'settings' }, '');
   };
