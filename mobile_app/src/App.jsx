@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
-import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash } from 'react-icons/fa';
+import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload } from 'react-icons/fa';
 import { App as CapacitorApp } from '@capacitor/app';
 
 // Supabase
@@ -15,9 +15,9 @@ import { Capacitor } from '@capacitor/core';
 const PROD_URL = import.meta.env.VITE_API_URL; 
 const PROD_WS = import.meta.env.VITE_WS_URL;   
 
-// Automatically detect the host IP address for local fallback
-const host = window.location.hostname || '192.168.1.35';
-const SERVER_IP = (host === 'localhost' || host === '127.0.0.1') ? '192.168.1.35' : host;
+// Detect runtime host when available (native app usually has no browser host).
+const host = window.location.hostname || '';
+const SERVER_IP = (host && host !== 'localhost' && host !== '127.0.0.1') ? host : '';
 const API_BASE_NORMALIZED = PROD_URL ? PROD_URL.replace(/\/+$/, '') : null;
 
 const normalizeWsUrl = (url) => {
@@ -30,9 +30,9 @@ const normalizeWsUrl = (url) => {
   return url;
 };
 
-export const API_BASE = API_BASE_NORMALIZED || `http://${SERVER_IP}:3000`;
+export const API_BASE = API_BASE_NORMALIZED || (SERVER_IP ? `http://${SERVER_IP}:3000` : 'http://localhost:3000');
 export const WS_URL = normalizeWsUrl(
-  PROD_WS || (API_BASE_NORMALIZED ? API_BASE_NORMALIZED.replace(/^http/, 'ws') : `ws://${SERVER_IP}:3000`)
+  PROD_WS || (API_BASE_NORMALIZED ? API_BASE_NORMALIZED.replace(/^http/, 'ws') : (SERVER_IP ? `ws://${SERVER_IP}:3000` : 'ws://localhost:3000'))
 );
 
 const FONTS = [
@@ -44,8 +44,14 @@ const FONTS = [
   { label: 'Courier', value: "'Courier New', monospace" },
 ];
 
+const safeUuid = () => {
+  const c = globalThis?.crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
 const createDeviceCode = () => {
-  const seed = (crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`)
+  const seed = safeUuid()
     .replace(/-/g, '')
     .toUpperCase();
   return `DEV-${seed.slice(0, 8)}`;
@@ -84,6 +90,17 @@ const rankByRelatedness = (items, query) => {
     .map(({ _score, ...rest }) => rest);
 };
 
+const normalizeHostInput = (value) => String(value || '')
+  .trim()
+  .replace(/^https?:\/\//i, '')
+  .replace(/^wss?:\/\//i, '')
+  .replace(/\/.*$/, '')
+  .replace(/:\d+$/, '');
+
+const createLocalSongId = () => `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const OFFLINE_DATA_FILE_PATH = 'worshipcast/offline-data.json';
+const NATIVE_FILE_STORAGE_ENABLED_IN_BUILD = false;
+
 function App() {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeTab') || 'db');
   const [tabSearch, setTabSearch] = useState(() => loadTabSearchState());
@@ -101,6 +118,7 @@ function App() {
   const heartbeatIntervalRef = useRef(null);
   const staleCheckIntervalRef = useRef(null);
   const lastPongAtRef = useRef(Date.now());
+  const pendingPresentRef = useRef(null);
   const reconnectDelayRef = useRef(1500);
   const ensureConnectedRef = useRef(() => {});
   const [activeStanza, setActiveStanza] = useState(null);
@@ -131,6 +149,7 @@ function App() {
     return deviceCode.slice(-6).padStart(6, '0').toUpperCase();
   });
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedOfflineLink, setCopiedOfflineLink] = useState(false);
 
   // A-Z filter
   const [selectedLetter, setSelectedLetter] = useState(null);
@@ -161,6 +180,198 @@ function App() {
     try { return JSON.parse(localStorage.getItem('worship_offline_cache')) || {}; }
     catch { return {}; }
   });
+  const [pendingSyncQueue, setPendingSyncQueue] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('worship_pending_sync_queue')) || []; }
+    catch { return []; }
+  });
+  const [syncState, setSyncState] = useState({ syncing: false, lastRun: null, lastError: '' });
+  const [offlineDownloadState, setOfflineDownloadState] = useState({ downloading: false, downloaded: 0, total: null, lastError: '' });
+  const [storageState, setStorageState] = useState({ permission: 'unknown', loaded: false, lastSavedAt: null, lastError: '' });
+  const [nativeFileStorageEnabled, setNativeFileStorageEnabled] = useState(() => localStorage.getItem('nativeFileStorageEnabled') === 'true');
+  const [offlineServerStatus, setOfflineServerStatus] = useState({ checking: false, ok: null, message: '' });
+
+  // Connection config for LAN/hotspot use.
+  const [serverHost, setServerHost] = useState(() => localStorage.getItem('presenterServerHost') || '');
+  const [serverPort, setServerPort] = useState(() => localStorage.getItem('presenterServerPort') || '3000');
+
+  const cleanedServerHost = useMemo(() => normalizeHostInput(serverHost), [serverHost]);
+  const cleanedServerPort = useMemo(() => {
+    const parsed = Number(serverPort);
+    if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) return '3000';
+    return String(parsed);
+  }, [serverPort]);
+
+  const apiBase = useMemo(() => {
+    if (API_BASE_NORMALIZED) return API_BASE_NORMALIZED;
+    if (cleanedServerHost) return `http://${cleanedServerHost}:${cleanedServerPort}`;
+    return API_BASE;
+  }, [cleanedServerHost, cleanedServerPort]);
+
+  const detectedLanHost = useMemo(() => {
+    if (cleanedServerHost) return cleanedServerHost;
+    return '';
+  }, [cleanedServerHost]);
+
+  const offlineTvUrl = useMemo(() => {
+    if (!detectedLanHost) return '';
+    return `http://${detectedLanHost}:${cleanedServerPort}/t/${roomCode}`;
+  }, [detectedLanHost, cleanedServerPort, roomCode]);
+  const offlineTvUrlSimple = useMemo(() => {
+    if (!detectedLanHost) return '';
+    return `http://${detectedLanHost}:${cleanedServerPort}/t/${roomCode}`;
+  }, [detectedLanHost, cleanedServerPort, roomCode]);
+
+  const pendingQueueRef = useRef(pendingSyncQueue);
+  const offlineCacheRef = useRef(offlineCache);
+  const syncInProgressRef = useRef(false);
+  const nativeStorageLoadedRef = useRef(false);
+
+  useEffect(() => { pendingQueueRef.current = pendingSyncQueue; }, [pendingSyncQueue]);
+  useEffect(() => { offlineCacheRef.current = offlineCache; }, [offlineCache]);
+
+  const ensureStoragePermission = useCallback(async (askUser = true) => {
+    if (!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD) {
+      setStorageState(prev => ({ ...prev, permission: 'disabled-in-build', loaded: true }));
+      if (askUser) {
+        alert('Device file storage is disabled in this build for stability. Offline data will continue using app local storage.');
+      }
+      return false;
+    }
+
+    if (!Capacitor.isNativePlatform()) {
+      setStorageState(prev => ({ ...prev, permission: 'not-required' }));
+      return true;
+    }
+
+    // App-private files (Directory.Data) normally do not need runtime permission.
+    // Keep permission prompt optional for users who want explicit storage grant.
+    try {
+      if (!askUser) {
+        setStorageState(prev => ({ ...prev, permission: 'app-data-only' }));
+        return true;
+      }
+
+      const allow = window.confirm('Allow storage permission for offline files? This lets the app save song data for offline access.');
+      if (!allow) {
+        setStorageState(prev => ({ ...prev, permission: 'app-data-only' }));
+        return true;
+      }
+
+      setStorageState(prev => ({ ...prev, permission: 'app-data-only' }));
+      setNativeFileStorageEnabled(false);
+      return false;
+    } catch (err) {
+      // Directory.Data generally works without external storage permission on Android.
+      setStorageState(prev => ({ ...prev, permission: 'app-data-only', lastError: err.message || '' }));
+      return true;
+    }
+  }, []);
+
+  const saveOfflineDataToDevice = useCallback(async () => {
+    if (!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD) return;
+    if (!Capacitor.isNativePlatform()) return;
+    if (!nativeFileStorageEnabled) return;
+    if (!nativeStorageLoadedRef.current) return;
+
+    try {
+      const payload = {
+        updatedAt: Date.now(),
+        offlineCache: offlineCacheRef.current,
+        pendingSyncQueue: pendingQueueRef.current
+      };
+
+      // Native file storage runtime is intentionally disabled in this build.
+      void payload;
+
+      setStorageState(prev => ({ ...prev, lastSavedAt: Date.now(), lastError: '' }));
+    } catch (err) {
+      setStorageState(prev => ({ ...prev, lastError: err.message || 'Failed to save app file' }));
+    }
+  }, [nativeFileStorageEnabled]);
+
+  const loadOfflineDataFromDevice = useCallback(async () => {
+    if (!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD) {
+      nativeStorageLoadedRef.current = true;
+      setStorageState(prev => ({ ...prev, loaded: true, permission: 'disabled-in-build' }));
+      return;
+    }
+
+    if (!Capacitor.isNativePlatform()) {
+      nativeStorageLoadedRef.current = true;
+      setStorageState(prev => ({ ...prev, loaded: true }));
+      return;
+    }
+
+    if (!nativeFileStorageEnabled) {
+      nativeStorageLoadedRef.current = true;
+      setStorageState(prev => ({ ...prev, loaded: true, permission: 'app-data-only' }));
+      return;
+    }
+
+    try {
+      const file = null;
+
+      const parsed = JSON.parse(file?.data || '{}');
+      if (parsed.offlineCache && typeof parsed.offlineCache === 'object') {
+        setOfflineCache(parsed.offlineCache);
+      }
+      if (Array.isArray(parsed.pendingSyncQueue)) {
+        setPendingSyncQueue(parsed.pendingSyncQueue);
+      }
+    } catch {
+      // Missing file is expected on first install.
+    } finally {
+      nativeStorageLoadedRef.current = true;
+      setStorageState(prev => ({ ...prev, loaded: true }));
+    }
+  }, [nativeFileStorageEnabled]);
+
+  const enqueueSongForSync = useCallback((item) => {
+    const syncItem = {
+      queueId: `q-${safeUuid().replace(/-/g, '').slice(0, 16)}`,
+      title: String(item.title || '').trim(),
+      stanzas: (item.stanzas || []).map(s => String(s || '').trim()).filter(Boolean),
+      sourceUrl: item.sourceUrl || null,
+      songId: item.songId || null,
+      forceUpdate: Boolean(item.forceUpdate),
+      localId: item.localId || null,
+      createdAt: Date.now()
+    };
+
+    if (!syncItem.title || syncItem.stanzas.length === 0) return;
+
+    setPendingSyncQueue(prev => {
+      // Replace older queue entry for same song/update target when possible.
+      const filtered = prev.filter(existing => {
+        if (syncItem.songId && existing.songId) return existing.songId !== syncItem.songId;
+        if (syncItem.localId && existing.localId) return existing.localId !== syncItem.localId;
+        return true;
+      });
+      return [...filtered, syncItem];
+    });
+  }, []);
+
+  const persistLocallyAndQueue = useCallback(({ title, stanzas, songId = null, sourceUrl = null, forceUpdate = false }) => {
+    const localId = songId || createLocalSongId();
+    const cleanTitle = String(title || '').trim();
+    const cleanStanzas = (stanzas || []).map(s => String(s || '').trim()).filter(Boolean);
+
+    setOfflineCache(prev => ({
+      ...prev,
+      [localId]: { id: localId, title: cleanTitle, stanzas: cleanStanzas, source: 'db', pendingSync: true }
+    }));
+
+    enqueueSongForSync({
+      title: cleanTitle,
+      stanzas: cleanStanzas,
+      sourceUrl,
+      songId: String(localId).startsWith('local-') ? null : localId,
+      forceUpdate,
+      localId
+    });
+
+    return localId;
+  }, [enqueueSongForSync]);
 
   // Persist settings
   useEffect(() => { localStorage.setItem('activeTab', activeTab); }, [activeTab]);
@@ -174,8 +385,197 @@ function App() {
   }, [userName]);
   useEffect(() => { localStorage.setItem('worship_favorites', JSON.stringify(favorites)); }, [favorites]);
   useEffect(() => { localStorage.setItem('worship_offline_cache', JSON.stringify(offlineCache)); }, [offlineCache]);
+  useEffect(() => { localStorage.setItem('worship_pending_sync_queue', JSON.stringify(pendingSyncQueue)); }, [pendingSyncQueue]);
   useEffect(() => { localStorage.setItem('displayFont', displayFont); }, [displayFont]);
   useEffect(() => { localStorage.setItem('displayFontSize', displayFontSize); }, [displayFontSize]);
+  useEffect(() => { localStorage.setItem('presenterServerHost', cleanedServerHost); }, [cleanedServerHost]);
+  useEffect(() => { localStorage.setItem('presenterServerPort', cleanedServerPort); }, [cleanedServerPort]);
+  useEffect(() => { localStorage.setItem('nativeFileStorageEnabled', nativeFileStorageEnabled ? 'true' : 'false'); }, [nativeFileStorageEnabled]);
+
+  useEffect(() => {
+    loadOfflineDataFromDevice();
+  }, [loadOfflineDataFromDevice]);
+
+  useEffect(() => {
+    saveOfflineDataToDevice();
+  }, [offlineCache, pendingSyncQueue, saveOfflineDataToDevice]);
+
+  const runPendingSync = useCallback(async () => {
+    if (syncInProgressRef.current) return;
+    const queue = pendingQueueRef.current;
+    if (!queue.length) return;
+    if (!navigator.onLine) return;
+
+    syncInProgressRef.current = true;
+    setSyncState(prev => ({ ...prev, syncing: true, lastError: '' }));
+
+    const remaining = [];
+    let firstError = '';
+
+    for (const item of queue) {
+      try {
+        const payload = {
+          title: item.title,
+          stanzas: item.stanzas,
+          sourceUrl: item.sourceUrl || null,
+          forceUpdate: item.forceUpdate
+        };
+
+        if (item.songId) payload.songId = item.songId;
+
+        const res = await axios.post(`${apiBase}/save_song`, payload);
+        const syncedSongId = res?.data?.songId;
+
+        if (item.localId && syncedSongId && item.localId !== syncedSongId) {
+          setOfflineCache(prev => {
+            const localEntry = prev[item.localId];
+            if (!localEntry) return prev;
+            const next = { ...prev };
+            delete next[item.localId];
+            next[syncedSongId] = { ...localEntry, id: syncedSongId, pendingSync: false };
+            return next;
+          });
+
+          setFavorites(prev => prev.map(f => (
+            f.id === item.localId ? { ...f, id: syncedSongId, source: 'db' } : f
+          )));
+
+          setSelectedSong(prev => (
+            prev && prev.id === item.localId
+              ? { ...prev, id: syncedSongId, isCached: true }
+              : prev
+          ));
+        } else if (item.localId) {
+          setOfflineCache(prev => {
+            if (!prev[item.localId]) return prev;
+            return {
+              ...prev,
+              [item.localId]: { ...prev[item.localId], pendingSync: false }
+            };
+          });
+        }
+      } catch (err) {
+        if (!firstError) {
+          firstError = err.response?.data?.details || err.message || 'Sync failed';
+        }
+        remaining.push(item);
+      }
+    }
+
+    setPendingSyncQueue(remaining);
+    setSyncState({ syncing: false, lastRun: Date.now(), lastError: firstError });
+    syncInProgressRef.current = false;
+  }, [apiBase]);
+
+  const downloadAllSongsForOffline = useCallback(async () => {
+    const confirmed = window.confirm('Do you want to download all songs to local app files for offline access?');
+    if (!confirmed) return;
+
+    if (!navigator.onLine) {
+      alert('Internet/mobile data is required for initial download.');
+      return;
+    }
+
+    setOfflineDownloadState({ downloading: true, downloaded: 0, total: null, lastError: '' });
+
+    try {
+      const PAGE_SIZE = 250;
+      let page = 0;
+      let totalDownloaded = 0;
+      const merged = { ...offlineCacheRef.current };
+
+      // Fetch songs in pages to avoid large payload spikes.
+      while (true) {
+        const from = page * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        const { data: songs, error: songsError } = await supabase
+          .from('songs')
+          .select('id, title, source_url')
+          .order('title', { ascending: true })
+          .range(from, to);
+
+        if (songsError) throw songsError;
+        if (!songs || songs.length === 0) break;
+
+        const ids = songs.map(song => song.id);
+        const { data: lyricsRows, error: lyricsError } = await supabase
+          .from('lyrics')
+          .select('song_id, stanza_number, lyrics')
+          .in('song_id', ids)
+          .order('stanza_number', { ascending: true });
+
+        if (lyricsError) throw lyricsError;
+
+        const lyricsBySong = {};
+        for (const row of lyricsRows || []) {
+          if (!lyricsBySong[row.song_id]) lyricsBySong[row.song_id] = [];
+          lyricsBySong[row.song_id].push(row.lyrics);
+        }
+
+        for (const song of songs) {
+          merged[song.id] = {
+            id: song.id,
+            title: song.title,
+            stanzas: lyricsBySong[song.id] || [],
+            source: 'db',
+            pendingSync: false,
+            sourceUrl: song.source_url || null
+          };
+        }
+
+        totalDownloaded += songs.length;
+        setOfflineDownloadState(prev => ({ ...prev, downloaded: totalDownloaded }));
+        page += 1;
+
+        if (songs.length < PAGE_SIZE) break;
+      }
+
+      setOfflineCache(merged);
+      setOfflineDownloadState({ downloading: false, downloaded: totalDownloaded, total: totalDownloaded, lastError: '' });
+      alert(`Downloaded ${totalDownloaded} songs for offline access.`);
+    } catch (err) {
+      setOfflineDownloadState(prev => ({ ...prev, downloading: false, lastError: err.message || 'Failed to download songs' }));
+      alert('Offline download failed: ' + (err.message || 'Unknown error'));
+    }
+  }, [ensureStoragePermission]);
+
+  const checkOfflineServer = useCallback(async () => {
+    if (!detectedLanHost) {
+      setOfflineServerStatus({ checking: false, ok: false, message: 'Set LAN Server IP first.' });
+      return;
+    }
+
+    setOfflineServerStatus({ checking: true, ok: null, message: 'Checking local server...' });
+    try {
+      const res = await axios.get(`http://${detectedLanHost}:${cleanedServerPort}/health`, { timeout: 2500 });
+      if (res?.data?.ok) {
+        setOfflineServerStatus({ checking: false, ok: true, message: 'Local offline server reachable.' });
+      } else {
+        setOfflineServerStatus({ checking: false, ok: false, message: 'Server responded unexpectedly.' });
+      }
+    } catch {
+      setOfflineServerStatus({
+        checking: false,
+        ok: false,
+        message: 'Cannot reach local server. Start backend and keep both devices on same hotspot/Wi-Fi.'
+      });
+    }
+  }, [detectedLanHost, cleanedServerPort]);
+
+  useEffect(() => {
+    if (!isOnline) return;
+    if (!pendingSyncQueue.length) return;
+    runPendingSync();
+  }, [isOnline, pendingSyncQueue.length, runPendingSync]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (navigator.onLine && pendingQueueRef.current.length > 0) {
+        runPendingSync();
+      }
+    }, 30000);
+    return () => clearInterval(id);
+  }, [runPendingSync]);
 
   // Online/offline detection
   useEffect(() => {
@@ -260,6 +660,13 @@ function App() {
           name: userNameRef.current || 'Anonymous',
           deviceCode: deviceCodeRef.current
         }));
+
+        // Flush queued present action if user tapped while socket was down.
+        const pending = pendingPresentRef.current;
+        if (pending) {
+          socket.send(JSON.stringify(pending));
+          pendingPresentRef.current = null;
+        }
 
         // App-level heartbeat for mobile/webview reliability.
         heartbeatIntervalRef.current = setInterval(() => {
@@ -435,7 +842,7 @@ function App() {
         const mapped = data.map(item => ({ id: item.id, title: item.title, source: 'db' }));
         setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
       } else {
-        const res = await axios.get(`${API_BASE}/search?q=${encodeURIComponent(searchQuery)}`);
+        const res = await axios.get(`${apiBase}/search?q=${encodeURIComponent(searchQuery)}`);
         setResults(res.data.map(item => ({ url: item.url, title: item.title, source: 'web' })));
       }
     } catch (err) {
@@ -463,7 +870,7 @@ function App() {
       const { data, error } = await supabase.from('songs').select('id, title').ilike('title', `${letter}%`).order('title', { ascending: true }).limit(100);
       if (error) throw error;
       setResults(data.map(item => ({ id: item.id, title: item.title, source: 'db' })));
-    } catch (err) {
+    } catch {
       // Offline fallback
       const cachedSongs = Object.values(offlineCache);
       const matches = cachedSongs.filter(s => s.title.toUpperCase().startsWith(letter));
@@ -493,11 +900,11 @@ function App() {
         }
         setSelectedSong({ id: songMetadata.id, title: songMetadata.title, stanzas: stanzasData, isCached: true });
       } else {
-        const res = await axios.get(`${API_BASE}/lyrics?url=${encodeURIComponent(songMetadata.url)}`);
+        const res = await axios.get(`${apiBase}/lyrics?url=${encodeURIComponent(songMetadata.url)}`);
         setSelectedSong({ url: songMetadata.url, title: songMetadata.title, stanzas: res.data, isCached: false });
       }
       window.history.pushState({ appView: 'song' }, '');
-    } catch (err) {
+    } catch {
       if (offlineCache[songMetadata.id]) {
         const c = offlineCache[songMetadata.id];
         setSelectedSong({ id: c.id, title: c.title, stanzas: c.stanzas, isCached: true });
@@ -551,7 +958,7 @@ function App() {
       };
       if (selectedSong.id) payload.songId = selectedSong.id;
 
-      const res = await axios.post(`${API_BASE}/save_song`, payload);
+      const res = await axios.post(`${apiBase}/save_song`, payload);
       const persistedId = res.data.songId || selectedSong.id;
 
       setSelectedSong(prev => ({
@@ -571,8 +978,24 @@ function App() {
 
       setIsEditingSong(false);
       alert('Song saved to database.');
-    } catch (err) {
-      alert('Failed to save edits: ' + (err.response?.data?.details || err.message));
+    } catch {
+      const localId = persistLocallyAndQueue({
+        title: cleanTitle,
+        stanzas: cleanStanzas,
+        songId: selectedSong.id || null,
+        sourceUrl: selectedSong.url || null,
+        forceUpdate: Boolean(selectedSong.id && !String(selectedSong.id).startsWith('local-'))
+      });
+
+      setSelectedSong(prev => ({
+        ...(prev || {}),
+        id: localId,
+        title: cleanTitle,
+        stanzas: cleanStanzas,
+        isCached: true
+      }));
+      setIsEditingSong(false);
+      alert('Saved offline. It will sync automatically when data connection is available.');
     } finally {
       setSavingEdits(false);
     }
@@ -583,11 +1006,11 @@ function App() {
     setSavingWebSongs(prev => ({ ...prev, [saveKey]: true }));
 
     try {
-      const lyricRes = await axios.get(`${API_BASE}/lyrics?url=${encodeURIComponent(songItem.url)}`);
+      const lyricRes = await axios.get(`${apiBase}/lyrics?url=${encodeURIComponent(songItem.url)}`);
       const stanzas = (lyricRes.data || []).map(s => String(s || '').trim()).filter(Boolean);
       if (stanzas.length === 0) throw new Error('No stanzas found to save');
 
-      const saveRes = await axios.post(`${API_BASE}/save_song`, {
+      const saveRes = await axios.post(`${apiBase}/save_song`, {
         title: songItem.title,
         stanzas,
         sourceUrl: songItem.url
@@ -608,24 +1031,28 @@ function App() {
   // ---- Present / Clear ----
   const presentLyrics = async (stanzaText, stanzaIndex) => {
     const socket = wsRef.current || ws;
+    const payload = {
+      type: 'present',
+      text: stanzaText,
+      room: roomCode,
+      font: displayFont,
+      fontSize: displayFontSize,
+      name: userNameRef.current || 'Anonymous',
+      deviceCode: deviceCodeRef.current
+    };
+
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: 'present',
-        text: stanzaText,
-        room: roomCode,
-        font: displayFont,
-        fontSize: displayFontSize,
-        name: userNameRef.current || 'Anonymous',
-        deviceCode: deviceCodeRef.current
-      }));
+      socket.send(JSON.stringify(payload));
       setActiveStanza(stanzaIndex);
     } else {
-      alert('WebSocket not connected. TV may not update.');
+      pendingPresentRef.current = payload;
+      setActiveStanza(stanzaIndex);
+      ensureConnectedRef.current();
     }
     // Auto-save web songs to DB
     if (selectedSong && !selectedSong.isCached) {
       try {
-        const res = await axios.post(`${API_BASE}/save_song`, { title: selectedSong.title, stanzas: selectedSong.stanzas });
+        const res = await axios.post(`${apiBase}/save_song`, { title: selectedSong.title, stanzas: selectedSong.stanzas });
         const newId = res.data.songId;
         setSelectedSong(prev => ({ ...prev, isCached: true, id: newId }));
         setOfflineCache(prev => ({ ...prev, [newId]: { id: newId, title: selectedSong.title, stanzas: selectedSong.stanzas, source: 'db' } }));
@@ -646,6 +1073,29 @@ function App() {
     }
   };
 
+  const handleOfflinePresentLink = () => {
+    if (!detectedLanHost) {
+      alert('Set LAN Server IP in settings first. Example: 192.168.1.35');
+      return;
+    }
+
+    navigator.clipboard.writeText(offlineTvUrl).then(() => {
+      setCopiedOfflineLink(true);
+      setTimeout(() => setCopiedOfflineLink(false), 2200);
+      alert([
+        'Offline Present Link Ready',
+        `Type this in browser: ${offlineTvUrlSimple}`,
+        `Full URL copied: ${offlineTvUrl}`
+      ].join('\n'));
+    }).catch(() => {
+      alert([
+        'Offline Present Link',
+        `Type this in browser: ${offlineTvUrlSimple}`,
+        `Full URL: ${offlineTvUrl}`
+      ].join('\n'));
+    });
+  };
+
   const completeProfileSetup = () => {
     const normalized = profileNameInput.trim();
     if (!normalized) {
@@ -664,7 +1114,7 @@ function App() {
 
   // ---- Share Link ----
   const handleShareLink = () => {
-    const tvUrl = `${API_BASE}/tv.html?room=${roomCode}`;
+    const tvUrl = `${apiBase}/tv.html?room=${roomCode}`;
     navigator.clipboard.writeText(tvUrl).then(() => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
@@ -704,14 +1154,23 @@ function App() {
     setAddSaving(true);
     setAddError('');
     try {
-      const res = await axios.post(`${API_BASE}/save_song`, { title: addTitle.trim(), stanzas });
+      const res = await axios.post(`${apiBase}/save_song`, { title: addTitle.trim(), stanzas });
       const newId = res.data.songId;
       // Cache locally too
       setOfflineCache(prev => ({ ...prev, [newId]: { id: newId, title: addTitle.trim(), stanzas, source: 'db' } }));
       setShowAddModal(false);
       alert(`✅ "${addTitle.trim()}" saved with ${stanzas.length} stanza(s)!`);
-    } catch (err) {
-      setAddError('Save failed: ' + (err.response?.data?.details || err.message));
+    } catch {
+      const localId = persistLocallyAndQueue({
+        title: addTitle.trim(),
+        stanzas,
+        sourceUrl: null,
+        songId: null,
+        forceUpdate: false
+      });
+      setShowAddModal(false);
+      setAddError('');
+      alert(`Saved offline as ${localId}. It will sync automatically when data connection is available.`);
     } finally { setAddSaving(false); }
   };
 
@@ -860,6 +1319,152 @@ function App() {
                 <FaShareAlt /> {copiedLink ? '✓' : ''}
               </button>
             </div>
+          </div>
+
+          <div className="stanza-card">
+            <h3 style={{ margin: 0 }}>Offline Present</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 8 }}>
+              Open TV/browser on same hotspot or Wi-Fi network.
+            </p>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 4 }}>
+              Simple link: {offlineTvUrlSimple || 'Set LAN Server IP first'}
+            </div>
+            <button
+              className={`share-btn ${copiedOfflineLink ? 'copied' : ''}`}
+              style={{ marginTop: 10 }}
+              onClick={handleOfflinePresentLink}
+              title="Copy Offline Present Link"
+            >
+              <FaWifi style={{ marginRight: 6 }} /> {copiedOfflineLink ? 'Copied' : 'Offline Present Link'}
+            </button>
+          </div>
+
+          <div className="stanza-card">
+            <h3 style={{ margin: 0 }}>LAN / Hotspot Server</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 8 }}>
+              Use server device IP so browser and mobile can connect on the same Wi-Fi or hotspot.
+            </p>
+            <input
+              className="modal-input"
+              placeholder="Server IP (e.g., 192.168.1.35)"
+              value={serverHost}
+              onChange={e => setServerHost(e.target.value)}
+            />
+            <input
+              className="modal-input"
+              placeholder="Port (default 3000)"
+              value={serverPort}
+              onChange={e => setServerPort(e.target.value.replace(/[^0-9]/g, ''))}
+            />
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+              API: {apiBase}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              WebSocket: {WS_URL}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Offline LAN IP: {detectedLanHost || 'Not set'}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4, wordBreak: 'break-all' }}>
+              Offline TV URL: {offlineTvUrl || 'Set LAN Server IP to generate link'}
+            </div>
+            <button
+              className="btn-save"
+              style={{ marginTop: 10 }}
+              onClick={checkOfflineServer}
+              disabled={offlineServerStatus.checking}
+            >
+              {offlineServerStatus.checking ? 'Checking...' : 'Check Offline Server'}
+            </button>
+            {offlineServerStatus.message && (
+              <div style={{ color: offlineServerStatus.ok ? '#29a36a' : '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+                {offlineServerStatus.message}
+              </div>
+            )}
+          </div>
+
+          <div className="stanza-card">
+            <h3 style={{ margin: 0 }}>Offline Sync</h3>
+            <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+              Pending items: {pendingSyncQueue.length}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Status: {syncState.syncing ? 'Syncing...' : 'Idle'}
+            </div>
+            {syncState.lastRun && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+                Last run: {new Date(syncState.lastRun).toLocaleString()}
+              </div>
+            )}
+            {syncState.lastError && (
+              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+                Last error: {syncState.lastError}
+              </div>
+            )}
+            <button
+              className="btn-save"
+              style={{ marginTop: 10 }}
+              onClick={runPendingSync}
+              disabled={syncState.syncing || pendingSyncQueue.length === 0}
+            >
+              {syncState.syncing ? 'Syncing...' : 'Sync Now'}
+            </button>
+            <button
+              className="btn-save"
+              style={{ marginTop: 10 }}
+              onClick={downloadAllSongsForOffline}
+              disabled={offlineDownloadState.downloading}
+            >
+              <FaDownload style={{ marginRight: 6 }} />
+              {offlineDownloadState.downloading ? `Downloading... ${offlineDownloadState.downloaded}` : 'Download All Songs Offline'}
+            </button>
+            {offlineDownloadState.lastError && (
+              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+                Download error: {offlineDownloadState.lastError}
+              </div>
+            )}
+          </div>
+
+          <div className="stanza-card">
+            <h3 style={{ margin: 0 }}>Device File Storage</h3>
+            <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+              Permission: {storageState.permission}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Enabled: {nativeFileStorageEnabled ? 'Yes' : 'No'}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Loaded: {storageState.loaded ? 'Yes' : 'No'}
+            </div>
+            {storageState.lastSavedAt && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+                Last saved: {new Date(storageState.lastSavedAt).toLocaleString()}
+              </div>
+            )}
+            {storageState.lastError && (
+              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+                Storage error: {storageState.lastError}
+              </div>
+            )}
+            <button
+              className="btn-save"
+              style={{ marginTop: 10 }}
+              onClick={() => ensureStoragePermission(true)}
+            >
+              Ask Storage Permission
+            </button>
+            <button
+              className="btn-save"
+              style={{ marginTop: 10 }}
+              onClick={() => setNativeFileStorageEnabled(v => !v)}
+            >
+              {nativeFileStorageEnabled ? 'Disable Device File Storage' : 'Enable Device File Storage'}
+            </button>
+            {!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
+                Native file storage is disabled in this build for crash safety.
+              </div>
+            )}
           </div>
 
           <div className="stanza-card">

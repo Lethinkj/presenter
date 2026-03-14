@@ -15,6 +15,17 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public')); // Serve TV display frontend
 
+app.get('/health', (req, res) => {
+    res.json({ ok: true, service: 'worshipcast-backend' });
+});
+
+// Short offline-present route for easy browser typing on hotspot/LAN.
+app.get('/t/:room', (req, res) => {
+    const rawRoom = String(req.params.room || 'default').trim().toUpperCase();
+    const safeRoom = encodeURIComponent(rawRoom.slice(0, 24) || 'DEFAULT');
+    res.redirect(`/tv.html?room=${safeRoom}`);
+});
+
 // Initialize Supabase client
 const cleanEnv = (value) => String(value || '').trim().replace(/^['\"]|['\"]$/g, '');
 const supabaseUrl = cleanEnv(process.env.SUPABASE_URL);
