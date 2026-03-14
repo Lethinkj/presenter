@@ -168,11 +168,11 @@ app.post('/save_song', async (req, res) => {
 
 // --- WebSocket Server for TV Presentation ---
 
-const clients = new Map(); // Map from ws -> { room: string | null }
+const clients = new Map(); // Map from ws -> { room: string | null, name: string, deviceCode: string }
 
 wss.on('connection', (ws) => {
     console.log('New WebSocket connection established (TV Screen / Controller)');
-    clients.set(ws, { room: null });
+    clients.set(ws, { room: null, name: 'Anonymous', deviceCode: 'Unknown' });
 
     // Send an initial connected message
     ws.send(JSON.stringify({ type: 'status', message: 'Connected to Presentation Server. Please join a room.' }));
@@ -184,9 +184,11 @@ wss.on('connection', (ws) => {
 
             if (message.type === 'join') {
                 const room = message.room || 'default';
-                clients.set(ws, { room });
-                console.log(`Client joined room: ${room}`);
-                ws.send(JSON.stringify({ type: 'status', message: `Joined room: ${room}` }));
+                const name = (message.name || 'Anonymous').toString().slice(0, 60);
+                const deviceCode = (message.deviceCode || 'Unknown').toString().slice(0, 60);
+                clients.set(ws, { room, name, deviceCode });
+                console.log(`Client joined room: ${room} | user: ${name} | device: ${deviceCode}`);
+                ws.send(JSON.stringify({ type: 'status', message: `Joined room: ${room}`, room, name, deviceCode }));
             }
             // Broadcast 'present' messages to all connected clients in the SAME room
             else if (message.type === 'present' || message.type === 'clear') {

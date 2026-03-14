@@ -43,6 +43,13 @@ const FONTS = [
   { label: 'Courier', value: "'Courier New', monospace" },
 ];
 
+const createDeviceCode = () => {
+  const seed = (crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`)
+    .replace(/-/g, '')
+    .toUpperCase();
+  return `DEV-${seed.slice(0, 8)}`;
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState('db');
   const [searchQuery, setSearchQuery] = useState('');
@@ -54,6 +61,7 @@ function App() {
   const [selectedSong, setSelectedSong] = useState(null);
   const [ws, setWs] = useState(null);
   const wsRef = useRef(null);
+  const roomCodeRef = useRef(roomCode);
   const reconnectTimerRef = useRef(null);
   const [activeStanza, setActiveStanza] = useState(null);
   const [isEditingSong, setIsEditingSong] = useState(false);
@@ -62,11 +70,25 @@ function App() {
   const [savingEdits, setSavingEdits] = useState(false);
   const [savingWebSongs, setSavingWebSongs] = useState({});
 
+  // Identity / Device
+  const [deviceCode, setDeviceCode] = useState(() => {
+    const saved = localStorage.getItem('deviceCode');
+    if (saved) return saved;
+    const generated = createDeviceCode();
+    localStorage.setItem('deviceCode', generated);
+    return generated;
+  });
+  const [userName, setUserName] = useState(() => localStorage.getItem('presenterUserName') || '');
+  const [showProfileSetup, setShowProfileSetup] = useState(() => !localStorage.getItem('presenterUserName'));
+  const [profileNameInput, setProfileNameInput] = useState(() => localStorage.getItem('presenterUserName') || '');
+  const userNameRef = useRef(userName);
+  const deviceCodeRef = useRef(deviceCode);
+
   // Room
   const [roomCode, setRoomCode] = useState(() => {
     const saved = localStorage.getItem('tvRoomCode');
     if (saved) return saved;
-    return Math.random().toString(36).slice(2, 8).padEnd(6, '0').toUpperCase();
+    return deviceCode.slice(-6).padStart(6, '0').toUpperCase();
   });
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -102,6 +124,12 @@ function App() {
 
   // Persist settings
   useEffect(() => { localStorage.setItem('tvRoomCode', roomCode); }, [roomCode]);
+  useEffect(() => { localStorage.setItem('deviceCode', deviceCode); }, [deviceCode]);
+  useEffect(() => {
+    if (userName.trim()) {
+      localStorage.setItem('presenterUserName', userName.trim());
+    }
+  }, [userName]);
   useEffect(() => { localStorage.setItem('worship_favorites', JSON.stringify(favorites)); }, [favorites]);
   useEffect(() => { localStorage.setItem('worship_offline_cache', JSON.stringify(offlineCache)); }, [offlineCache]);
   useEffect(() => { localStorage.setItem('displayFont', displayFont); }, [displayFont]);
@@ -115,6 +143,22 @@ function App() {
     window.addEventListener('offline', goOffline);
     return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
   }, []);
+
+  // Keep the latest room code available to WebSocket callbacks.
+  useEffect(() => {
+    roomCodeRef.current = roomCode;
+    userNameRef.current = userName;
+    deviceCodeRef.current = deviceCode;
+    const socket = wsRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'join',
+        room: roomCode,
+        name: userNameRef.current || 'Anonymous',
+        deviceCode: deviceCodeRef.current
+      }));
+    }
+  }, [roomCode, userName, deviceCode]);
 
   // WebSocket
   useEffect(() => {
@@ -136,7 +180,12 @@ function App() {
 
       socket.onopen = () => {
         clearReconnectTimer();
-        socket.send(JSON.stringify({ type: 'join', room: roomCode }));
+        socket.send(JSON.stringify({
+          type: 'join',
+          room: roomCodeRef.current,
+          name: userNameRef.current || 'Anonymous',
+          deviceCode: deviceCodeRef.current
+        }));
       };
 
       socket.onclose = () => {
@@ -161,7 +210,7 @@ function App() {
       wsRef.current = null;
       setWs(null);
     };
-  }, [roomCode]);
+  }, []);
 
   // ---- Search ----
   const handleSearch = async () => {
@@ -345,7 +394,15 @@ function App() {
   const presentLyrics = async (stanzaText, stanzaIndex) => {
     const socket = wsRef.current || ws;
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'present', text: stanzaText, room: roomCode, font: displayFont, fontSize: displayFontSize }));
+      socket.send(JSON.stringify({
+        type: 'present',
+        text: stanzaText,
+        room: roomCode,
+        font: displayFont,
+        fontSize: displayFontSize,
+        name: userNameRef.current || 'Anonymous',
+        deviceCode: deviceCodeRef.current
+      }));
       setActiveStanza(stanzaIndex);
     } else {
       alert('WebSocket not connected. TV may not update.');
@@ -364,9 +421,24 @@ function App() {
   const clearScreen = () => {
     const socket = wsRef.current || ws;
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'clear', room: roomCode }));
+      socket.send(JSON.stringify({
+        type: 'clear',
+        room: roomCode,
+        name: userNameRef.current || 'Anonymous',
+        deviceCode: deviceCodeRef.current
+      }));
       setActiveStanza(null);
     }
+  };
+
+  const completeProfileSetup = () => {
+    const normalized = profileNameInput.trim();
+    if (!normalized) {
+      alert('Please enter your name to continue.');
+      return;
+    }
+    setUserName(normalized);
+    setShowProfileSetup(false);
   };
 
   // ---- Share Link ----
@@ -535,6 +607,9 @@ function App() {
       {/* Header */}
       <div className="app-header">
         <h1>WorshipCast</h1>
+        <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+          User: {userName || 'Anonymous'} | Device: {deviceCode}
+        </div>
         <div className="room-control">
           <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>TV Room: </label>
           <input type="text" className="room-input" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} />
@@ -710,6 +785,29 @@ function App() {
               <button className="btn-save" onClick={handleSaveSong} disabled={addSaving}>
                 {addSaving ? 'Saving...' : '💾 Save Song'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProfileSetup && (
+        <div className="modal-overlay" onClick={e => e.stopPropagation()}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2 className="modal-title">Welcome</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: 0 }}>
+              Enter your name for this device. A unique device code is generated automatically.
+            </p>
+            <input
+              className="modal-input"
+              placeholder="Your Name"
+              value={profileNameInput}
+              onChange={e => setProfileNameInput(e.target.value)}
+            />
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+              Device Code: {deviceCode}
+            </p>
+            <div className="modal-actions">
+              <button className="btn-save" onClick={completeProfileSetup}>Continue</button>
             </div>
           </div>
         </div>
