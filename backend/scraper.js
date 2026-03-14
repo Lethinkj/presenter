@@ -44,6 +44,7 @@ function matchesQuery(title, queryTokens) {
 
 function normalizeResultUrl(href) {
     if (!href) return '';
+    href = String(href).replace(/&amp;/g, '&').trim();
     if (href.startsWith('//')) return `https:${href}`;
 
     // DuckDuckGo redirect wrapper: /l/?uddg=<encoded-url>
@@ -52,13 +53,31 @@ function normalizeResultUrl(href) {
             const redirectUrl = href.startsWith('http') ? href : `https://duckduckgo.com${href}`;
             const parsed = new URL(redirectUrl);
             const target = parsed.searchParams.get('uddg');
-            if (target) return decodeURIComponent(target);
+            if (target) return decodeURIComponent(target).replace(/&amp;/g, '&').trim();
         } catch (_) {
             return '';
         }
     }
 
     return href;
+}
+
+function unwrapRedirectUrl(url) {
+    const raw = String(url || '').replace(/&amp;/g, '&').trim();
+    if (!raw) return raw;
+
+    if (/duckduckgo\.com\/l\/\?/i.test(raw) || raw.startsWith('/l/?')) {
+        try {
+            const normalized = raw.startsWith('http') ? raw : `https://duckduckgo.com${raw}`;
+            const parsed = new URL(normalized);
+            const target = parsed.searchParams.get('uddg');
+            if (target) return decodeURIComponent(target).replace(/&amp;/g, '&').trim();
+        } catch (_) {
+            return raw;
+        }
+    }
+
+    return raw;
 }
 
 function looksLikeLyricsPage(url, title) {
@@ -98,13 +117,55 @@ function htmlToPlainText(html = '') {
 }
 
 function textToStanzas(text = '') {
-    return String(text)
+    let stanzas = String(text)
         .split(/\n\s*\n/)
         .map(s => s.trim())
         .filter(s => s.length > 8)
-        .filter(s => !/cookie|comment|subscribe|share|menu|privacy|terms|posted on|posted in/i.test(s))
+        .filter(s => !/cookie|comment|subscribe|share|menu|privacy|terms|posted on|posted in|search|breadcrumb|related posts|facebook|instagram|youtube|telegram/i.test(s))
+        .filter(s => !/^(home|blog|about|contact|skip to content)$/i.test(s))
+        .filter(s => !/^home\s*[»>|]/i.test(s))
+        .filter(s => !/christian songs lyrics, chords|all rights reserved|copyright/i.test(s))
+        .filter(s => {
+            const letters = (s.match(/[a-zA-Z\u0B80-\u0BFF]/g) || []).length;
+            const digits = (s.match(/[0-9]/g) || []).length;
+            return letters > 0 && digits < letters;
+        })
         .filter((stanza, index, arr) => arr.indexOf(stanza) === index)
         .slice(0, 100);
+
+    // If too many blocks remain, prioritize Tamil lyric-like stanzas.
+    if (stanzas.length > 40) {
+        const tamilHeavy = stanzas.filter(s => /[\u0B80-\u0BFF]/.test(s));
+        if (tamilHeavy.length >= 3) {
+            stanzas = tamilHeavy.slice(0, 80);
+        } else {
+            stanzas = stanzas.slice(0, 80);
+        }
+    }
+
+    return stanzas;
+}
+
+function extractJsonLdArticleText($) {
+    let combined = '';
+    $('script[type="application/ld+json"]').each((_, el) => {
+        const raw = $(el).text();
+        if (!raw || raw.length < 10) return;
+        try {
+            const parsed = JSON.parse(raw);
+            const items = Array.isArray(parsed) ? parsed : [parsed];
+            for (const item of items) {
+                if (!item || typeof item !== 'object') continue;
+                const body = item.articleBody || item.description || '';
+                if (typeof body === 'string' && body.length > 30) {
+                    combined += `${body}\n\n`;
+                }
+            }
+        } catch (_) {
+            // Ignore invalid JSON-LD blocks.
+        }
+    });
+    return combined.trim();
 }
 
 async function searchWeb(query) {
@@ -366,8 +427,13 @@ async function fetchLyricsFromGenericPage(url) {
         if (blocks.length > bestBlocks.length) bestBlocks = blocks;
     }
 
-    // Fallback to full body text if block extraction is sparse.
+    // Fallback to JSON-LD article body if present.
     let rawText = bestBlocks.join('\n\n');
+    if (!rawText || rawText.length < 80) {
+        rawText = extractJsonLdArticleText($);
+    }
+
+    // Fallback to full body text if block extraction is sparse.
     if (!rawText || rawText.length < 80) {
         rawText = htmlToPlainText(($('main').html() || $('article').html() || $('body').html() || ''));
     }
@@ -402,27 +468,28 @@ async function fetchLyricsFromGenericPage(url) {
  */
 async function fetchLyrics(url) {
     try {
-        console.log(`[scraper] Fetching lyrics from: ${url}`);
-        const parsed = new URL(url);
+        const sourceUrl = unwrapRedirectUrl(url);
+        console.log(`[scraper] Fetching lyrics from: ${sourceUrl}`);
+        const parsed = new URL(sourceUrl);
         const host = parsed.hostname.replace(/^www\./i, '');
 
         if (host.includes('christsquare.com')) {
-            const stanzas = await fetchLyricsFromChristSquare(url);
+            const stanzas = await fetchLyricsFromChristSquare(sourceUrl);
             if (stanzas[0] && stanzas[0].startsWith('Error:')) {
-                return await fetchLyricsFromGenericPage(url);
+                return await fetchLyricsFromGenericPage(sourceUrl);
             }
             return stanzas;
         }
 
         if (host.includes('christiansongbook.org')) {
-            const stanzas = await fetchLyricsFromChristianSongBook(url);
+            const stanzas = await fetchLyricsFromChristianSongBook(sourceUrl);
             if (stanzas[0] && stanzas[0].startsWith('Error:')) {
-                return await fetchLyricsFromGenericPage(url);
+                return await fetchLyricsFromGenericPage(sourceUrl);
             }
             return stanzas;
         }
 
-        return await fetchLyricsFromGenericPage(url);
+        return await fetchLyricsFromGenericPage(sourceUrl);
 
     } catch (error) {
         console.error('[scraper] Fetch lyrics failed:', error.message);
