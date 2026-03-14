@@ -67,6 +67,53 @@ app.post('/save_song', async (req, res) => {
     }
 
     try {
+        const isSourceUrlColumnError = (err) => {
+            if (!err) return false;
+            const msg = `${err.message || ''} ${err.details || ''}`.toLowerCase();
+            return msg.includes('source_url') || err.code === '42703';
+        };
+
+        const safeUpdateSong = async (id, payload) => {
+            let updatePayload = { ...payload };
+            let result = await supabase
+                .from('songs')
+                .update(updatePayload)
+                .eq('id', id);
+
+            if (result.error && isSourceUrlColumnError(result.error) && 'source_url' in updatePayload) {
+                // Schema may not have source_url yet; retry without it.
+                delete updatePayload.source_url;
+                result = await supabase
+                    .from('songs')
+                    .update(updatePayload)
+                    .eq('id', id);
+            }
+
+            if (result.error) throw result.error;
+        };
+
+        const safeInsertSong = async (payload) => {
+            let insertPayload = { ...payload };
+            let result = await supabase
+                .from('songs')
+                .insert([insertPayload])
+                .select()
+                .single();
+
+            if (result.error && isSourceUrlColumnError(result.error) && 'source_url' in insertPayload) {
+                // Schema may not have source_url yet; retry without it.
+                delete insertPayload.source_url;
+                result = await supabase
+                    .from('songs')
+                    .insert([insertPayload])
+                    .select()
+                    .single();
+            }
+
+            if (result.error) throw result.error;
+            return result.data;
+        };
+
         const updateLyricsForSong = async (targetSongId) => {
             const { error: deleteLyricsError } = await supabase
                 .from('lyrics')
@@ -94,12 +141,7 @@ app.post('/save_song', async (req, res) => {
             const updatePayload = { title };
             if (sourceUrl) updatePayload.source_url = sourceUrl;
 
-            const { error: updateSongError } = await supabase
-                .from('songs')
-                .update(updatePayload)
-                .eq('id', songId);
-
-            if (updateSongError) throw updateSongError;
+            await safeUpdateSong(songId, updatePayload);
 
             const savedCount = await updateLyricsForSong(songId);
             return res.json({ message: 'Song updated successfully', songId, updated: true, savedStanzas: savedCount });
@@ -126,12 +168,7 @@ app.post('/save_song', async (req, res) => {
                 const updatePayload = { title };
                 if (sourceUrl) updatePayload.source_url = sourceUrl;
 
-                const { error: updateSongError } = await supabase
-                    .from('songs')
-                    .update(updatePayload)
-                    .eq('id', resolvedSongId);
-
-                if (updateSongError) throw updateSongError;
+                await safeUpdateSong(resolvedSongId, updatePayload);
 
                 const savedCount = await updateLyricsForSong(resolvedSongId);
                 return res.json({ message: 'Song updated successfully', songId: resolvedSongId, updated: true, savedStanzas: savedCount });
@@ -144,13 +181,7 @@ app.post('/save_song', async (req, res) => {
             const insertPayload = { title };
             if (sourceUrl) insertPayload.source_url = sourceUrl;
 
-            const { data: newSong, error: insertSongError } = await supabase
-                .from('songs')
-                .insert([insertPayload])
-                .select()
-                .single();
-
-            if (insertSongError) throw insertSongError;
+            const newSong = await safeInsertSong(insertPayload);
             resolvedSongId = newSong.id;
             console.log(`Inserted new song "${title}" with ID: ${resolvedSongId}`);
 
