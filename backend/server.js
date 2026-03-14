@@ -1,5 +1,5 @@
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true });
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -18,7 +18,11 @@ app.use(express.static('public')); // Serve TV display frontend
 // Initialize Supabase client
 const cleanEnv = (value) => String(value || '').trim().replace(/^['\"]|['\"]$/g, '');
 const supabaseUrl = cleanEnv(process.env.SUPABASE_URL);
-const supabaseKey = cleanEnv(process.env.SUPABASE_ANON_KEY);
+const supabaseKey = cleanEnv(
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 const isValidSupabaseUrl = (value) => {
     try {
@@ -30,11 +34,13 @@ const isValidSupabaseUrl = (value) => {
 };
 
 if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Missing SUPABASE_URL or SUPABASE_ANON_KEY in backend/.env');
+    throw new Error(
+        'Missing Supabase config. Set SUPABASE_URL and SUPABASE_ANON_KEY (or SUPABASE_KEY/SUPABASE_SERVICE_ROLE_KEY) in your host environment variables or backend/.env for local runs.'
+    );
 }
 
 if (!isValidSupabaseUrl(supabaseUrl)) {
-    throw new Error(`Invalid SUPABASE_URL in backend/.env: ${supabaseUrl}`);
+    throw new Error(`Invalid SUPABASE_URL: ${supabaseUrl}`);
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -245,7 +251,7 @@ app.post('/save_song', async (req, res) => {
         const details = `${error?.message || ''} ${error?.details || ''}`;
         const hasDnsIssue = /enotfound|eai_again|getaddrinfo/i.test(details);
         const hint = hasDnsIssue
-            ? 'Supabase hostname could not be resolved. Verify SUPABASE_URL in backend/.env, internet DNS access, and that the server can reach supabase.co.'
+            ? 'Supabase hostname could not be resolved. Verify SUPABASE_URL in host environment variables (or backend/.env locally), internet DNS access, and that the server can reach supabase.co.'
             : '';
         res.status(500).json({ error: "Failed to save song", details: error.message, hint });
     }
