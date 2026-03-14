@@ -9,7 +9,9 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvw
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4dmhoZ2JlcmZrcXZ3anprb2lhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzODcyNjksImV4cCI6MjA4ODk2MzI2OX0.GLvwq5RUcTBM7yZxiSmi7sa7NQ4ItmIUrkoCJzkC8I0';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+
+const OfflinePresenter = registerPlugin('OfflinePresenter');
 
 // Use Production URLs if provided via .env, otherwise fallback to local dev network
 const PROD_URL = import.meta.env.VITE_API_URL; 
@@ -90,16 +92,142 @@ const rankByRelatedness = (items, query) => {
     .map(({ _score, ...rest }) => rest);
 };
 
-const normalizeHostInput = (value) => String(value || '')
-  .trim()
-  .replace(/^https?:\/\//i, '')
-  .replace(/^wss?:\/\//i, '')
-  .replace(/\/.*$/, '')
-  .replace(/:\d+$/, '');
+const extractFirstIpv4 = (value) => {
+  const text = String(value || '');
+  const match = text.match(/\b(\d{1,3}(?:\.\d{1,3}){3})\b/);
+  if (!match) return '';
+  const ip = match[1];
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4) return '';
+  if (parts.some(p => Number.isNaN(p) || p < 0 || p > 255)) return '';
+  return ip;
+};
+
+const isValidIpv4 = (value) => {
+  const parts = String(value || '').split('.');
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const n = Number(part);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return false;
+  }
+  return true;
+};
+
+const isValidHostname = (value) => {
+  const host = String(value || '').trim();
+  if (!host || host.length > 253) return false;
+  if (host.startsWith('.') || host.endsWith('.') || host.includes('..')) return false;
+  if (!/^[a-zA-Z0-9.-]+$/.test(host)) return false;
+  const labels = host.split('.');
+  if (labels.some(label => !label || label.length > 63)) return false;
+  if (labels.some(label => label.startsWith('-') || label.endsWith('-'))) return false;
+  return true;
+};
+
+const normalizeHostInput = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const stripped = raw
+    .replace(/^https?:\/\//i, '')
+    .replace(/^wss?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '')
+    .trim();
+
+  const ipv4 = extractFirstIpv4(stripped);
+  if (ipv4 && isValidIpv4(ipv4)) return ipv4;
+
+  if (isValidIpv4(stripped)) return stripped;
+  if (isValidHostname(stripped)) return stripped.toLowerCase();
+  return '';
+};
+
+const formatOfflineLink = (host, port, roomCode, includeProtocol = true) => {
+  if (!host) return '';
+  const safePort = String(port || '3000');
+  const portPart = safePort === '80' ? '' : `:${safePort}`;
+  return `${includeProtocol ? 'http://' : ''}${host}${portPart}/t/${roomCode}`;
+};
+
+const isPrivateIpv4 = (ip) => {
+  if (!ip) return false;
+  if (/^10\./.test(ip)) return true;
+  if (/^192\.168\./.test(ip)) return true;
+  const m = ip.match(/^172\.(\d+)\./);
+  if (m) {
+    const second = Number(m[1]);
+    return second >= 16 && second <= 31;
+  }
+  return false;
+};
+
+const isShareableOfflineHost = (host) => {
+  const normalized = normalizeHostInput(host);
+  if (!normalized) return false;
+  if (normalized === 'localhost' || normalized.startsWith('127.')) return false;
+  if (isValidIpv4(normalized)) {
+    return isPrivateIpv4(normalized);
+  }
+  return true;
+};
+
+const hostFromUrl = (value) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname || '';
+  } catch {
+    return '';
+  }
+};
+
+const discoverLocalIps = async () => {
+  const RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+  if (!RTC) return [];
+
+  return new Promise((resolve) => {
+    const ips = new Set();
+    let settled = false;
+    const pc = new RTC({ iceServers: [] });
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try { pc.onicecandidate = null; } catch { /* no-op */ }
+      try { pc.close(); } catch { /* no-op */ }
+      resolve(Array.from(ips));
+    };
+
+    const timer = setTimeout(finish, 1800);
+
+    pc.createDataChannel('worshipcast');
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) {
+        clearTimeout(timer);
+        finish();
+        return;
+      }
+      const text = String(event.candidate.candidate || '');
+      const found = text.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+      if (found && isPrivateIpv4(found[1])) {
+        ips.add(found[1]);
+      }
+    };
+
+    pc.createOffer()
+      .then(offer => pc.setLocalDescription(offer))
+      .catch(() => {
+        clearTimeout(timer);
+        finish();
+      });
+  });
+};
 
 const createLocalSongId = () => `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const OFFLINE_DATA_FILE_PATH = 'worshipcast/offline-data.json';
 const NATIVE_FILE_STORAGE_ENABLED_IN_BUILD = false;
+const LOCAL_DATA_SNAPSHOT_KEY = 'worship_local_data_snapshot';
 
 function App() {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeTab') || 'db');
@@ -120,6 +248,7 @@ function App() {
   const lastPongAtRef = useRef(Date.now());
   const pendingPresentRef = useRef(null);
   const reconnectDelayRef = useRef(1500);
+  const presentAttemptRef = useRef(0);
   const ensureConnectedRef = useRef(() => {});
   const [activeStanza, setActiveStanza] = useState(null);
   const [isEditingSong, setIsEditingSong] = useState(false);
@@ -187,8 +316,19 @@ function App() {
   const [syncState, setSyncState] = useState({ syncing: false, lastRun: null, lastError: '' });
   const [offlineDownloadState, setOfflineDownloadState] = useState({ downloading: false, downloaded: 0, total: null, lastError: '' });
   const [storageState, setStorageState] = useState({ permission: 'unknown', loaded: false, lastSavedAt: null, lastError: '' });
+  const [localSnapshotSavedAt, setLocalSnapshotSavedAt] = useState(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(LOCAL_DATA_SNAPSHOT_KEY) || '{}');
+      return parsed.savedAt || null;
+    } catch {
+      return null;
+    }
+  });
   const [nativeFileStorageEnabled, setNativeFileStorageEnabled] = useState(() => localStorage.getItem('nativeFileStorageEnabled') === 'true');
   const [offlineServerStatus, setOfflineServerStatus] = useState({ checking: false, ok: null, message: '' });
+  const [autoDetectingLan, setAutoDetectingLan] = useState(false);
+  const [startingOfflinePresent, setStartingOfflinePresent] = useState(false);
+  const [nativeOfflineServer, setNativeOfflineServer] = useState({ running: false, host: '', port: 3000, url: '' });
 
   // Connection config for LAN/hotspot use.
   const [serverHost, setServerHost] = useState(() => localStorage.getItem('presenterServerHost') || '');
@@ -212,19 +352,21 @@ function App() {
     return '';
   }, [cleanedServerHost]);
 
-  const offlineTvUrl = useMemo(() => {
-    if (!detectedLanHost) return '';
-    return `http://${detectedLanHost}:${cleanedServerPort}/t/${roomCode}`;
-  }, [detectedLanHost, cleanedServerPort, roomCode]);
-  const offlineTvUrlSimple = useMemo(() => {
-    if (!detectedLanHost) return '';
-    return `http://${detectedLanHost}:${cleanedServerPort}/t/${roomCode}`;
-  }, [detectedLanHost, cleanedServerPort, roomCode]);
+  const offlineTvUrl = useMemo(
+    () => formatOfflineLink(detectedLanHost, cleanedServerPort, roomCode, true),
+    [detectedLanHost, cleanedServerPort, roomCode]
+  );
+  const offlineTvUrlSimple = useMemo(
+    () => formatOfflineLink(detectedLanHost, cleanedServerPort, roomCode, false),
+    [detectedLanHost, cleanedServerPort, roomCode]
+  );
 
   const pendingQueueRef = useRef(pendingSyncQueue);
   const offlineCacheRef = useRef(offlineCache);
   const syncInProgressRef = useRef(false);
   const nativeStorageLoadedRef = useRef(false);
+  const autoDetectAttemptedRef = useRef(false);
+  const autoDetectPromiseRef = useRef(null);
 
   useEffect(() => { pendingQueueRef.current = pendingSyncQueue; }, [pendingSyncQueue]);
   useEffect(() => { offlineCacheRef.current = offlineCache; }, [offlineCache]);
@@ -393,6 +535,21 @@ function App() {
   useEffect(() => { localStorage.setItem('nativeFileStorageEnabled', nativeFileStorageEnabled ? 'true' : 'false'); }, [nativeFileStorageEnabled]);
 
   useEffect(() => {
+    const snapshot = {
+      savedAt: Date.now(),
+      favorites,
+      offlineCache,
+      pendingSyncQueue,
+      roomCode,
+      userName: userName || '',
+      serverHost: cleanedServerHost,
+      serverPort: cleanedServerPort
+    };
+    localStorage.setItem(LOCAL_DATA_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    setLocalSnapshotSavedAt(snapshot.savedAt);
+  }, [favorites, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort]);
+
+  useEffect(() => {
     loadOfflineDataFromDevice();
   }, [loadOfflineDataFromDevice]);
 
@@ -539,15 +696,144 @@ function App() {
     }
   }, [ensureStoragePermission]);
 
-  const checkOfflineServer = useCallback(async () => {
-    if (!detectedLanHost) {
-      setOfflineServerStatus({ checking: false, ok: false, message: 'Set LAN Server IP first.' });
-      return;
+  const probeHealth = useCallback(async (candidateHost) => {
+    try {
+      const res = await axios.get(`http://${candidateHost}:${cleanedServerPort}/health`, { timeout: 1600 });
+      return !!res?.data?.ok;
+    } catch {
+      return false;
     }
+  }, [cleanedServerPort]);
+
+  const autoDetectLanServer = useCallback(async () => {
+    if (autoDetectPromiseRef.current) {
+      return autoDetectPromiseRef.current;
+    }
+
+    const run = (async () => {
+      setAutoDetectingLan(true);
+
+      try {
+      const candidates = [];
+      const addCandidate = (hostValue) => {
+        const normalized = normalizeHostInput(hostValue);
+        if (!isShareableOfflineHost(normalized)) return;
+        if (!candidates.includes(normalized)) candidates.push(normalized);
+      };
+
+      const immediateCandidates = [
+        cleanedServerHost,
+        hostFromUrl(apiBase),
+        hostFromUrl(WS_URL)
+      ];
+
+      for (const hostValue of immediateCandidates) {
+        addCandidate(hostValue);
+      }
+
+      // Fast path: try known hosts first before broader scanning.
+      for (const hostValue of candidates) {
+        // eslint-disable-next-line no-await-in-loop
+        const ok = await probeHealth(hostValue);
+        if (ok) {
+          setServerHost(hostValue);
+          setOfflineServerStatus({ checking: false, ok: true, message: `Auto-detected local server: ${hostValue}` });
+          return hostValue;
+        }
+      }
+
+      const localIps = await discoverLocalIps();
+      for (const ip of localIps) addCandidate(ip);
+
+      for (const ip of localIps) {
+        const parts = ip.split('.').map(Number);
+        if (parts.length !== 4) continue;
+
+        const prefix = `${parts[0]}.${parts[1]}.${parts[2]}`;
+        const preferredOctets = [
+          parts[3],
+          1, 2, 10, 20, 30, 35, 40, 50, 60, 80, 90, 100, 101, 120, 150, 200, 254
+        ];
+
+        for (let d = 1; d <= 5; d++) {
+          preferredOctets.push(parts[3] + d, parts[3] - d);
+        }
+
+        for (const octet of preferredOctets) {
+          if (octet < 1 || octet > 254) continue;
+          addCandidate(`${prefix}.${octet}`);
+        }
+      }
+
+      // Keep scanning bounded to avoid long waits on weak networks.
+      const boundedCandidates = candidates.slice(0, 80);
+
+      if (!boundedCandidates.length) {
+        setOfflineServerStatus({ checking: false, ok: false, message: 'Could not auto-detect LAN IP. Connect to hotspot/Wi-Fi first.' });
+        return '';
+      }
+
+      // Probe in parallel batches and short-circuit on first success.
+      const batchSize = 16;
+      for (let i = 0; i < boundedCandidates.length; i += batchSize) {
+        const batch = boundedCandidates.slice(i, i + batchSize);
+        const found = await Promise.any(
+          batch.map(async (hostValue) => {
+            const ok = await probeHealth(hostValue);
+            if (!ok) throw new Error('unreachable');
+            return hostValue;
+          })
+        ).catch(() => '');
+
+        if (found) {
+          const cleanHost = normalizeHostInput(found);
+          setServerHost(cleanHost);
+          setOfflineServerStatus({ checking: false, ok: true, message: `Auto-detected local server: ${cleanHost}` });
+          return cleanHost;
+        }
+      }
+
+      setOfflineServerStatus({ checking: false, ok: false, message: 'Auto-detect failed. Ensure backend is running on same hotspot/Wi-Fi.' });
+      return '';
+      } finally {
+        setAutoDetectingLan(false);
+      }
+    })();
+
+    autoDetectPromiseRef.current = run;
+    return run.finally(() => {
+      if (autoDetectPromiseRef.current === run) {
+        autoDetectPromiseRef.current = null;
+      }
+    });
+  }, [cleanedServerHost, apiBase, probeHealth]);
+
+  const checkOfflineServer = useCallback(async () => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const status = await OfflinePresenter.getStatus();
+        if (status?.running && status?.host && isShareableOfflineHost(status.host)) {
+          const cleanHost = normalizeHostInput(status.host);
+          setServerHost(cleanHost);
+          setOfflineServerStatus({ checking: false, ok: true, message: `Offline server running at ${cleanHost}` });
+          setNativeOfflineServer(prev => ({ ...prev, running: true, host: cleanHost }));
+          return;
+        }
+      } catch {
+        // fallback to LAN check below
+      }
+    }
+
+    let hostToCheck = detectedLanHost;
+    if (!hostToCheck) {
+      hostToCheck = await autoDetectLanServer();
+    }
+
+    if (!hostToCheck) return;
 
     setOfflineServerStatus({ checking: true, ok: null, message: 'Checking local server...' });
     try {
-      const res = await axios.get(`http://${detectedLanHost}:${cleanedServerPort}/health`, { timeout: 2500 });
+      const res = await axios.get(`http://${hostToCheck}:${cleanedServerPort}/health`, { timeout: 2500 });
       if (res?.data?.ok) {
         setOfflineServerStatus({ checking: false, ok: true, message: 'Local offline server reachable.' });
       } else {
@@ -560,7 +846,66 @@ function App() {
         message: 'Cannot reach local server. Start backend and keep both devices on same hotspot/Wi-Fi.'
       });
     }
-  }, [detectedLanHost, cleanedServerPort]);
+  }, [detectedLanHost, cleanedServerPort, autoDetectLanServer]);
+
+  const ensureOfflineServerReady = useCallback(async () => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const status = await OfflinePresenter.getStatus();
+        if (status?.running && status?.host && isShareableOfflineHost(status.host)) {
+          const cleanHost = normalizeHostInput(status.host);
+          setServerHost(cleanHost);
+          setNativeOfflineServer(prev => ({ ...prev, running: true, host: cleanHost, port: Number(cleanedServerPort) }));
+          setOfflineServerStatus({ checking: false, ok: true, message: `Offline server running at ${cleanHost}` });
+          return cleanHost;
+        }
+      } catch {
+        // continue to startServer fallback
+      }
+
+      try {
+        const started = await OfflinePresenter.startServer({
+          port: Number(cleanedServerPort),
+          room: roomCode
+        });
+        const host = String(started?.host || '');
+        const url = String(started?.url || '');
+        const cleanHost = normalizeHostInput(host) || normalizeHostInput(hostFromUrl(url));
+        if (cleanHost && isShareableOfflineHost(cleanHost)) {
+          setServerHost(cleanHost);
+          setNativeOfflineServer({
+            running: true,
+            host: cleanHost,
+            port: Number(cleanedServerPort),
+            url
+          });
+          setOfflineServerStatus({ checking: false, ok: true, message: `Offline server started in app: ${cleanHost}` });
+          return cleanHost;
+        }
+      } catch (err) {
+        setOfflineServerStatus({ checking: false, ok: false, message: err?.message || 'Failed to start in-app offline server.' });
+      }
+    }
+
+    let hostToUse = detectedLanHost;
+    if (!hostToUse) {
+      hostToUse = await autoDetectLanServer();
+    }
+    if (!hostToUse) return '';
+
+    const ok = await probeHealth(hostToUse);
+    if (!ok) return '';
+    return hostToUse;
+  }, [detectedLanHost, autoDetectLanServer, probeHealth, cleanedServerPort, roomCode]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    if (cleanedServerHost) return;
+    if (autoDetectAttemptedRef.current) return;
+
+    autoDetectAttemptedRef.current = true;
+    autoDetectLanServer();
+  }, [showSettings, cleanedServerHost, autoDetectLanServer]);
 
   useEffect(() => {
     if (!isOnline) return;
@@ -1030,7 +1375,6 @@ function App() {
 
   // ---- Present / Clear ----
   const presentLyrics = async (stanzaText, stanzaIndex) => {
-    const socket = wsRef.current || ws;
     const payload = {
       type: 'present',
       text: stanzaText,
@@ -1041,14 +1385,41 @@ function App() {
       deviceCode: deviceCodeRef.current
     };
 
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(payload));
-      setActiveStanza(stanzaIndex);
-    } else {
-      pendingPresentRef.current = payload;
-      setActiveStanza(stanzaIndex);
-      ensureConnectedRef.current();
-    }
+    const sendPayload = () => {
+      if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
+        OfflinePresenter.present({
+          room: roomCode,
+          text: stanzaText,
+          font: displayFont,
+          fontSize: displayFontSize,
+          name: userNameRef.current || 'Anonymous',
+          deviceCode: deviceCodeRef.current
+        }).catch(() => {
+          // fallback will happen on next tap through ws path if needed
+        });
+        return;
+      }
+
+      const socket = wsRef.current || ws;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(payload));
+      } else {
+        pendingPresentRef.current = payload;
+        ensureConnectedRef.current();
+      }
+    };
+
+    setActiveStanza(stanzaIndex);
+
+    // One-tap reliability: send immediately, then retry once shortly after.
+    // If user taps another stanza, stale retry is ignored.
+    const attemptId = ++presentAttemptRef.current;
+    sendPayload();
+    setTimeout(() => {
+      if (presentAttemptRef.current !== attemptId) return;
+      sendPayload();
+    }, 220);
+
     // Auto-save web songs to DB
     if (selectedSong && !selectedSong.isCached) {
       try {
@@ -1061,6 +1432,16 @@ function App() {
   };
 
   const clearScreen = () => {
+    if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
+      OfflinePresenter.clear({
+        room: roomCode,
+        name: userNameRef.current || 'Anonymous',
+        deviceCode: deviceCodeRef.current
+      }).catch(() => {});
+      setActiveStanza(null);
+      return;
+    }
+
     const socket = wsRef.current || ws;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({
@@ -1073,27 +1454,62 @@ function App() {
     }
   };
 
-  const handleOfflinePresentLink = () => {
-    if (!detectedLanHost) {
-      alert('Set LAN Server IP in settings first. Example: 192.168.1.35');
+  const handleOfflinePresentLink = async () => {
+    const hostToUse = await ensureOfflineServerReady();
+
+    if (!hostToUse) {
+      alert('Could not start offline present server. Ensure hotspot/Wi-Fi is active and try again.');
       return;
     }
 
-    navigator.clipboard.writeText(offlineTvUrl).then(() => {
+    const resolvedUrl = formatOfflineLink(hostToUse, cleanedServerPort, roomCode, true);
+    const shortLink = formatOfflineLink(hostToUse, cleanedServerPort, roomCode, false);
+
+    navigator.clipboard.writeText(resolvedUrl).then(() => {
       setCopiedOfflineLink(true);
       setTimeout(() => setCopiedOfflineLink(false), 2200);
       alert([
         'Offline Present Link Ready',
-        `Type this in browser: ${offlineTvUrlSimple}`,
-        `Full URL copied: ${offlineTvUrl}`
+        `Type this in browser: ${shortLink}`,
+        `Full URL copied: ${resolvedUrl}`
       ].join('\n'));
     }).catch(() => {
       alert([
         'Offline Present Link',
-        `Type this in browser: ${offlineTvUrlSimple}`,
-        `Full URL: ${offlineTvUrl}`
+        `Type this in browser: ${shortLink}`,
+        `Full URL: ${resolvedUrl}`
       ].join('\n'));
     });
+  };
+
+  const handleStartOfflinePresent = async () => {
+    if (startingOfflinePresent) return;
+    setStartingOfflinePresent(true);
+    try {
+      const hostToUse = await ensureOfflineServerReady();
+      if (!hostToUse) {
+        setOfflineServerStatus({
+          checking: false,
+          ok: false,
+          message: 'Cannot start offline presenter.'
+        });
+        alert('Offline present could not start.');
+        return;
+      }
+
+      const resolvedUrl = formatOfflineLink(hostToUse, cleanedServerPort, roomCode, true);
+      const shortLink = formatOfflineLink(hostToUse, cleanedServerPort, roomCode, false);
+      setOfflineServerStatus({ checking: false, ok: true, message: `Offline presenting ready at ${hostToUse}` });
+
+      navigator.clipboard.writeText(resolvedUrl).catch(() => {});
+      alert([
+        'Offline Present Started',
+        `Open in browser: ${shortLink}`,
+        `Copied URL: ${resolvedUrl}`
+      ].join('\n'));
+    } finally {
+      setStartingOfflinePresent(false);
+    }
   };
 
   const completeProfileSetup = () => {
@@ -1327,7 +1743,7 @@ function App() {
               Open TV/browser on same hotspot or Wi-Fi network.
             </p>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 4 }}>
-              Simple link: {offlineTvUrlSimple || 'Set LAN Server IP first'}
+              Simple link: {offlineTvUrlSimple || 'Auto-detecting...'}
             </div>
             <button
               className={`share-btn ${copiedOfflineLink ? 'copied' : ''}`}
@@ -1337,6 +1753,19 @@ function App() {
             >
               <FaWifi style={{ marginRight: 6 }} /> {copiedOfflineLink ? 'Copied' : 'Offline Present Link'}
             </button>
+            <button
+              className="btn-save"
+              style={{ marginTop: 10 }}
+              onClick={handleStartOfflinePresent}
+              disabled={startingOfflinePresent || autoDetectingLan}
+            >
+              {startingOfflinePresent ? 'Starting...' : 'Start Present Offline'}
+            </button>
+            {autoDetectingLan && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
+                Auto-detecting local server...
+              </div>
+            )}
           </div>
 
           <div className="stanza-card">
@@ -1436,6 +1865,11 @@ function App() {
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
               Loaded: {storageState.loaded ? 'Yes' : 'No'}
             </div>
+            {localSnapshotSavedAt && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+                Local data saved: {new Date(localSnapshotSavedAt).toLocaleString()}
+              </div>
+            )}
             {storageState.lastSavedAt && (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
                 Last saved: {new Date(storageState.lastSavedAt).toLocaleString()}

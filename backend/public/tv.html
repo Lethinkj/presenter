@@ -37,9 +37,11 @@
         .lyric-line {
             font-size: 8vw; /* Large fluid typography for TV */
             font-weight: bold;
-            line-height: 1.4;
+            line-height: 1.25;
             text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.8);
-            margin-bottom: 2vh;
+            white-space: pre-wrap;
+            max-width: 100%;
+            max-height: 100%;
             /* Simple fade in animation */
             animation: fadeIn 0.5s ease-in-out;
         }
@@ -146,77 +148,55 @@
             };
         }
 
-        let currentElements = [];
-        let currentSpacers = [];
+        let currentElement = null;
         let currentFontSizeType = 'auto';
 
         function displayLyrics(text, fontSize) {
             lyricsContainer.innerHTML = '';
-            currentElements = [];
-            currentSpacers = [];
+            currentElement = null;
             currentFontSizeType = fontSize || 'auto';
-            
-            // Split by newline and create div elements
-            const lines = text.split('\n');
-            lines.forEach(line => {
-                if (line.trim() !== '') {
-                    const div = document.createElement('div');
-                    div.className = 'lyric-line';
-                    div.innerText = line;
-                    lyricsContainer.appendChild(div);
-                    currentElements.push(div);
-                } else {
-                    // Add some spacing for blank lines within a stanza
-                    const spacer = document.createElement('div');
-                    spacer.style.height = '1.2vh';
-                    lyricsContainer.appendChild(spacer);
-                    currentSpacers.push(spacer);
-                }
-            });
+
+            const div = document.createElement('div');
+            div.className = 'lyric-line';
+            div.innerText = text || '';
+            lyricsContainer.appendChild(div);
+            currentElement = div;
 
             applyFontSize();
         }
 
         function applyFontSize() {
-            if (currentElements.length === 0) return;
+            if (!currentElement) return;
 
             if (currentFontSizeType === 'auto') {
-                autoFit(currentElements);
+                autoFit(currentElement);
             } else {
-                // Fixed size (e.g. 8vw)
-                currentElements.forEach(el => el.style.fontSize = currentFontSizeType + 'vw');
+                const parsed = parseFloat(String(currentFontSizeType));
+                if (!Number.isNaN(parsed) && parsed > 0) {
+                    currentElement.style.fontSize = parsed + 'vw';
+                } else {
+                    currentFontSizeType = 'auto';
+                    autoFit(currentElement);
+                }
             }
         }
 
-        function autoFit(elements) {
-            // Use pixel fitting against the actual container box so fullscreen transitions
-            // do not unexpectedly shrink text due to viewport unit recalculation differences.
+        function autoFit(element) {
             const boxWidth = lyricsContainer.clientWidth;
             const boxHeight = lyricsContainer.clientHeight;
             if (!boxWidth || !boxHeight) return;
 
-            const maxW = boxWidth * 0.96;
-            const maxH = boxHeight * 0.96;
+            const maxW = boxWidth * 0.98;
+            const maxH = boxHeight * 0.98;
             const minPx = 18;
             let low = minPx;
-            let high = Math.min(boxWidth * 0.16, boxHeight * 0.22);
+            let high = Math.max(30, Math.floor(Math.min(boxWidth * 0.28, boxHeight * 0.34)));
             let best = minPx;
 
             const applyAutoStyles = (sizePx) => {
-                const lineCount = elements.length;
-                const lineHeight = lineCount > 10 ? 1.16 : lineCount > 7 ? 1.2 : 1.25;
-                const marginBottom = lineCount > 10 ? 2 : lineCount > 7 ? 3 : 5;
-
-                elements.forEach((el, index) => {
-                    el.style.fontSize = `${sizePx}px`;
-                    el.style.lineHeight = `${lineHeight}`;
-                    el.style.marginBottom = index === elements.length - 1 ? '0px' : `${marginBottom}px`;
-                });
-
-                const spacerHeight = lineCount > 8 ? '6px' : '10px';
-                currentSpacers.forEach(sp => {
-                    sp.style.height = spacerHeight;
-                });
+                element.style.fontSize = `${sizePx}px`;
+                element.style.lineHeight = '1.25';
+                element.style.marginBottom = '0px';
             };
 
             lyricsContainer.style.overflow = 'hidden';
@@ -226,7 +206,7 @@
                 const mid = Math.floor((low + high) / 2);
                 applyAutoStyles(mid);
 
-                if (lyricsContainer.scrollHeight <= maxH && lyricsContainer.scrollWidth <= maxW) {
+                if (element.scrollHeight <= maxH && element.scrollWidth <= maxW) {
                     best = mid;
                     low = mid + 1;
                 } else {
