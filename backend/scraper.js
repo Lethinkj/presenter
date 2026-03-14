@@ -82,6 +82,31 @@ function scoreResult(item, queryTokens) {
     return score;
 }
 
+function htmlToPlainText(html = '') {
+    return String(html)
+        .replace(/<(br|BR)\s*\/?\s*>/g, '\n')
+        .replace(/<\/(p|div|li|h1|h2|h3|h4|h5|h6|section|article)>/gi, '\n\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/\r/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+}
+
+function textToStanzas(text = '') {
+    return String(text)
+        .split(/\n\s*\n/)
+        .map(s => s.trim())
+        .filter(s => s.length > 8)
+        .filter(s => !/cookie|comment|subscribe|share|menu|privacy|terms|posted on|posted in/i.test(s))
+        .filter((stanza, index, arr) => arr.indexOf(stanza) === index)
+        .slice(0, 100);
+}
+
 async function searchWeb(query) {
     const queryTokens = buildQueryTokens(query);
     const fullQuery = `${query} tamil christian song lyrics`;
@@ -331,15 +356,7 @@ async function fetchLyricsFromGenericPage(url) {
         root.find('p, li, div').each((i, el) => {
             let html = $(el).html() || '';
             if (!html) return;
-            const text = html
-                .replace(/<br\s*[\/]?>/gi, '\n')
-                .replace(/<[^>]+>/g, ' ')
-                .replace(/&nbsp;/g, ' ')
-                .replace(/&amp;/g, '&')
-                .replace(/\s+\n/g, '\n')
-                .replace(/\n\s+/g, '\n')
-                .replace(/[ \t]{2,}/g, ' ')
-                .trim();
+            const text = htmlToPlainText(html);
 
             if (!text || text.length < 8) return;
             if (/cookie|comment|subscribe|share|menu|copyright|privacy/i.test(text)) return;
@@ -349,13 +366,30 @@ async function fetchLyricsFromGenericPage(url) {
         if (blocks.length > bestBlocks.length) bestBlocks = blocks;
     }
 
-    const rawText = bestBlocks.join('\n\n');
-    const stanzas = rawText
-        .split(/\n\s*\n/)
-        .map(s => s.trim())
-        .filter(s => s.length > 8)
-        .filter((stanza, index, arr) => arr.indexOf(stanza) === index)
-        .slice(0, 80);
+    // Fallback to full body text if block extraction is sparse.
+    let rawText = bestBlocks.join('\n\n');
+    if (!rawText || rawText.length < 80) {
+        rawText = htmlToPlainText(($('main').html() || $('article').html() || $('body').html() || ''));
+    }
+
+    let stanzas = textToStanzas(rawText);
+
+    // Final fallback: split by line breaks if stanza-based split did not work.
+    if (stanzas.length === 0) {
+        const lines = String(rawText)
+            .split(/\n+/)
+            .map(s => s.trim())
+            .filter(s => s.length > 8)
+            .slice(0, 80);
+
+        if (lines.length > 0) {
+            const grouped = [];
+            for (let i = 0; i < lines.length; i += 4) {
+                grouped.push(lines.slice(i, i + 4).join('\n'));
+            }
+            stanzas = grouped;
+        }
+    }
 
     return stanzas.length > 0 ? stanzas : ['Error: Could not extract lyrics from this page.'];
 }
@@ -373,11 +407,19 @@ async function fetchLyrics(url) {
         const host = parsed.hostname.replace(/^www\./i, '');
 
         if (host.includes('christsquare.com')) {
-            return await fetchLyricsFromChristSquare(url);
+            const stanzas = await fetchLyricsFromChristSquare(url);
+            if (stanzas[0] && stanzas[0].startsWith('Error:')) {
+                return await fetchLyricsFromGenericPage(url);
+            }
+            return stanzas;
         }
 
         if (host.includes('christiansongbook.org')) {
-            return await fetchLyricsFromChristianSongBook(url);
+            const stanzas = await fetchLyricsFromChristianSongBook(url);
+            if (stanzas[0] && stanzas[0].startsWith('Error:')) {
+                return await fetchLyricsFromGenericPage(url);
+            }
+            return stanzas;
         }
 
         return await fetchLyricsFromGenericPage(url);
