@@ -174,6 +174,15 @@ function App() {
     const connect = () => {
       if (isDisposed) return;
 
+      const existing = wsRef.current;
+      if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      if (existing && existing.readyState !== WebSocket.CLOSED) {
+        try { existing.close(); } catch { /* no-op */ }
+      }
+
       const socket = new WebSocket(WS_URL);
       wsRef.current = socket;
       setWs(socket);
@@ -199,11 +208,34 @@ function App() {
       };
     };
 
+    const ensureConnected = () => {
+      if (isDisposed) return;
+      clearReconnectTimer();
+      connect();
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        ensureConnected();
+      }
+    };
+
     connect();
+
+    // Mobile browsers/webviews may suspend timers when screen is off.
+    // Re-check socket immediately when app/page becomes active again.
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', ensureConnected);
+    window.addEventListener('pageshow', ensureConnected);
+    window.addEventListener('online', ensureConnected);
 
     return () => {
       isDisposed = true;
       clearReconnectTimer();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', ensureConnected);
+      window.removeEventListener('pageshow', ensureConnected);
+      window.removeEventListener('online', ensureConnected);
       if (wsRef.current) {
         try { wsRef.current.close(); } catch { /* no-op */ }
       }
