@@ -186,31 +186,42 @@
         }
 
         function autoFit(elements) {
-            let size = 12; // Start large (12vw)
-            const minSize = 2; // Minimum 2vw
+            // Use pixel fitting against the actual container box so fullscreen transitions
+            // do not unexpectedly shrink text due to viewport unit recalculation differences.
+            const boxWidth = lyricsContainer.clientWidth;
+            const boxHeight = lyricsContainer.clientHeight;
+            if (!boxWidth || !boxHeight) return;
 
-            // Temporarily hide overflow to measure properly without causing layout thrashing loops
+            const maxW = boxWidth * 0.96;
+            const maxH = boxHeight * 0.96;
+            const minPx = 18;
+            let sizePx = Math.min(boxWidth * 0.14, boxHeight * 0.2);
+
             lyricsContainer.style.overflow = 'hidden';
+            elements.forEach(el => el.style.fontSize = `${sizePx}px`);
 
-            elements.forEach(el => el.style.fontSize = size + 'vw');
-            
-            // Allow 5% margin
-            const maxH = window.innerHeight * 0.9;
-            const maxW = window.innerWidth * 0.95;
-
-            // Reduce font size until it fits
-            while ((lyricsContainer.scrollHeight > maxH || lyricsContainer.scrollWidth > maxW) && size > minSize) {
-                size -= 0.5;
-                elements.forEach(el => el.style.fontSize = size + 'vw');
+            while ((lyricsContainer.scrollHeight > maxH || lyricsContainer.scrollWidth > maxW) && sizePx > minPx) {
+                sizePx -= 2;
+                elements.forEach(el => el.style.fontSize = `${sizePx}px`);
             }
         }
 
-        // Re-calculate font on window resize
+        function recalcAutoFontSoon() {
+            if (currentFontSizeType !== 'auto') return;
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => applyFontSize());
+            });
+        }
+
+        // Re-calculate font on viewport changes
         window.addEventListener('resize', () => {
             if (currentFontSizeType === 'auto') {
                 applyFontSize();
             }
         });
+        window.addEventListener('orientationchange', recalcAutoFontSoon);
+        document.addEventListener('fullscreenchange', recalcAutoFontSoon);
+        document.addEventListener('webkitfullscreenchange', recalcAutoFontSoon);
 
         // Initialize connection
         connectWebSocket();
