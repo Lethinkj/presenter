@@ -255,6 +255,12 @@ body {
   gap: 10px;
 }
 
+.settings-room-control {
+  justify-content: flex-start;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
 .room-input {
   padding: 5px 10px;
   border-radius: 4px;

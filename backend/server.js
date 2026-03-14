@@ -172,7 +172,12 @@ const clients = new Map(); // Map from ws -> { room: string | null, name: string
 
 wss.on('connection', (ws) => {
     console.log('New WebSocket connection established (TV Screen / Controller)');
+    ws.isAlive = true;
     clients.set(ws, { room: null, name: 'Anonymous', deviceCode: 'Unknown' });
+
+    ws.on('pong', () => {
+        ws.isAlive = true;
+    });
 
     // Send an initial connected message
     ws.send(JSON.stringify({ type: 'status', message: 'Connected to Presentation Server. Please join a room.' }));
@@ -189,6 +194,9 @@ wss.on('connection', (ws) => {
                 clients.set(ws, { room, name, deviceCode });
                 console.log(`Client joined room: ${room} | user: ${name} | device: ${deviceCode}`);
                 ws.send(JSON.stringify({ type: 'status', message: `Joined room: ${room}`, room, name, deviceCode }));
+            }
+            else if (message.type === 'ping') {
+                ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
             }
             // Broadcast 'present' messages to all connected clients in the SAME room
             else if (message.type === 'present' || message.type === 'clear') {
@@ -216,6 +224,22 @@ wss.on('connection', (ws) => {
         console.log('WebSocket connection closed');
         clients.delete(ws);
     });
+});
+
+// Server-side keepalive for broken idle connections.
+const wsHeartbeat = setInterval(() => {
+    for (const client of wss.clients) {
+        if (client.isAlive === false) {
+            try { client.terminate(); } catch { /* no-op */ }
+            continue;
+        }
+        client.isAlive = false;
+        try { client.ping(); } catch { /* no-op */ }
+    }
+}, 30000);
+
+wss.on('close', () => {
+    clearInterval(wsHeartbeat);
 });
 
 const PORT = process.env.PORT || 3000;

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
-import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes } from 'react-icons/fa';
+import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash } from 'react-icons/fa';
 
 // Supabase
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvwjzkoia.supabase.co';
@@ -50,19 +50,57 @@ const createDeviceCode = () => {
   return `DEV-${seed.slice(0, 8)}`;
 };
 
+const loadTabSearchState = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('tabSearchState') || '{}');
+    return {
+      db: parsed.db || '',
+      web: parsed.web || '',
+      favorites: parsed.favorites || ''
+    };
+  } catch {
+    return { db: '', web: '', favorites: '' };
+  }
+};
+
+const rankByRelatedness = (items, query) => {
+  const tokens = String(query || '').toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
+  if (tokens.length === 0) return items;
+
+  return [...items]
+    .map(item => {
+      const title = String(item.title || '').toLowerCase();
+      let score = 0;
+      for (const token of tokens) {
+        if (title === token) score += 8;
+        else if (title.startsWith(token)) score += 5;
+        else if (title.includes(token)) score += 2;
+      }
+      if (title.includes(tokens.join(' '))) score += 4;
+      return { ...item, _score: score };
+    })
+    .sort((a, b) => b._score - a._score || a.title.localeCompare(b.title))
+    .map(({ _score, ...rest }) => rest);
+};
+
 function App() {
-  const [activeTab, setActiveTab] = useState('db');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeTab') || 'db');
+  const [tabSearch, setTabSearch] = useState(() => loadTabSearchState());
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Presentation
   const [selectedSong, setSelectedSong] = useState(null);
   const [ws, setWs] = useState(null);
   const wsRef = useRef(null);
-  const roomCodeRef = useRef(roomCode);
+  const roomCodeRef = useRef('');
   const reconnectTimerRef = useRef(null);
+  const heartbeatIntervalRef = useRef(null);
+  const staleCheckIntervalRef = useRef(null);
+  const lastPongAtRef = useRef(Date.now());
+  const reconnectDelayRef = useRef(1500);
   const [activeStanza, setActiveStanza] = useState(null);
   const [isEditingSong, setIsEditingSong] = useState(false);
   const [editTitle, setEditTitle] = useState('');
@@ -123,7 +161,9 @@ function App() {
   });
 
   // Persist settings
+  useEffect(() => { localStorage.setItem('activeTab', activeTab); }, [activeTab]);
   useEffect(() => { localStorage.setItem('tvRoomCode', roomCode); }, [roomCode]);
+  useEffect(() => { localStorage.setItem('tabSearchState', JSON.stringify(tabSearch)); }, [tabSearch]);
   useEffect(() => { localStorage.setItem('deviceCode', deviceCode); }, [deviceCode]);
   useEffect(() => {
     if (userName.trim()) {
@@ -164,11 +204,30 @@ function App() {
   useEffect(() => {
     let isDisposed = false;
 
+    const clearHeartbeat = () => {
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
+      if (staleCheckIntervalRef.current) {
+        clearInterval(staleCheckIntervalRef.current);
+        staleCheckIntervalRef.current = null;
+      }
+    };
+
     const clearReconnectTimer = () => {
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
+    };
+
+    const scheduleReconnect = () => {
+      if (isDisposed) return;
+      clearReconnectTimer();
+      const delay = reconnectDelayRef.current;
+      reconnectTimerRef.current = setTimeout(connect, delay);
+      reconnectDelayRef.current = Math.min(delay * 1.6, 10000);
     };
 
     const connect = () => {
@@ -189,17 +248,49 @@ function App() {
 
       socket.onopen = () => {
         clearReconnectTimer();
+        clearHeartbeat();
+        reconnectDelayRef.current = 1500;
+        lastPongAtRef.current = Date.now();
+
         socket.send(JSON.stringify({
           type: 'join',
           room: roomCodeRef.current,
           name: userNameRef.current || 'Anonymous',
           deviceCode: deviceCodeRef.current
         }));
+
+        // App-level heartbeat for mobile/webview reliability.
+        heartbeatIntervalRef.current = setInterval(() => {
+          const active = wsRef.current;
+          if (!active || active.readyState !== WebSocket.OPEN) return;
+          active.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+        }, 20000);
+
+        staleCheckIntervalRef.current = setInterval(() => {
+          const active = wsRef.current;
+          if (!active || active.readyState !== WebSocket.OPEN) return;
+          // If we don't receive any pong for too long, force reconnect.
+          if (Date.now() - lastPongAtRef.current > 45000) {
+            try { active.close(); } catch { /* no-op */ }
+          }
+        }, 10000);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'pong' || msg.type === 'status') {
+            lastPongAtRef.current = Date.now();
+          }
+        } catch {
+          // ignore non-JSON control messages
+        }
       };
 
       socket.onclose = () => {
+        clearHeartbeat();
         if (isDisposed) return;
-        reconnectTimerRef.current = setTimeout(connect, 1500);
+        scheduleReconnect();
       };
 
       socket.onerror = () => {
@@ -231,6 +322,7 @@ function App() {
 
     return () => {
       isDisposed = true;
+      clearHeartbeat();
       clearReconnectTimer();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', ensureConnected);
@@ -244,8 +336,38 @@ function App() {
     };
   }, []);
 
+  // In-app back stack: close song/settings on browser/mobile back before exiting app.
+  useEffect(() => {
+    const onPopState = () => {
+      if (selectedSong) {
+        setSelectedSong(null);
+        setActiveStanza(null);
+        return;
+      }
+      if (showSettings) {
+        setShowSettings(false);
+      }
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [selectedSong, showSettings]);
+
+  const openSettingsPage = () => {
+    setShowSettings(true);
+    window.history.pushState({ appView: 'settings' }, '');
+  };
+
+  const closeSettingsPage = () => {
+    setShowSettings(false);
+    if (window.history.state?.appView === 'settings') {
+      window.history.back();
+    }
+  };
+
   // ---- Search ----
   const handleSearch = async () => {
+    const searchQuery = tabSearch[activeTab] || '';
     if (activeTab === 'favorites') { setResults(favorites); return; }
     if (!searchQuery.trim()) { setResults([]); return; }
     setLoading(true);
@@ -253,9 +375,20 @@ function App() {
     setSelectedLetter(null);
     try {
       if (activeTab === 'db') {
-        const { data, error } = await supabase.from('songs').select('id, title').ilike('title', `%${searchQuery}%`).limit(100);
+        const tokens = searchQuery.toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
+        let queryBuilder = supabase.from('songs').select('id, title');
+
+        if (tokens.length <= 1) {
+          queryBuilder = queryBuilder.ilike('title', `%${searchQuery}%`);
+        } else {
+          const orFilters = tokens.map(t => `title.ilike.%${t.replace(/,/g, '')}%`).join(',');
+          queryBuilder = queryBuilder.or(orFilters);
+        }
+
+        const { data, error } = await queryBuilder.limit(250);
         if (error) throw error;
-        setResults(data.map(item => ({ id: item.id, title: item.title, source: 'db' })));
+        const mapped = data.map(item => ({ id: item.id, title: item.title, source: 'db' }));
+        setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
       } else {
         const res = await axios.get(`${API_BASE}/search?q=${encodeURIComponent(searchQuery)}`);
         setResults(res.data.map(item => ({ url: item.url, title: item.title, source: 'web' })));
@@ -264,8 +397,12 @@ function App() {
       console.error('Search error:', err);
       if (activeTab === 'db') {
         const cachedSongs = Object.values(offlineCache);
-        const localMatches = cachedSongs.filter(s => s.title.toLowerCase().includes(searchQuery.toLowerCase()));
-        setResults(localMatches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true })));
+        const localMatches = cachedSongs.filter(s => {
+          const title = (s.title || '').toLowerCase();
+          return searchQuery.toLowerCase().split(/\s+/).filter(Boolean).some(t => title.includes(t));
+        });
+        const mapped = localMatches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true }));
+        setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
       } else {
         alert('Search failed. Check connection.');
       }
@@ -274,7 +411,7 @@ function App() {
 
   const handleLetterFilter = async (letter) => {
     setSelectedLetter(letter);
-    setSearchQuery('');
+    setTabSearch(prev => ({ ...prev, db: '' }));
     setLoading(true);
     setResults([]);
     try {
@@ -314,6 +451,7 @@ function App() {
         const res = await axios.get(`${API_BASE}/lyrics?url=${encodeURIComponent(songMetadata.url)}`);
         setSelectedSong({ url: songMetadata.url, title: songMetadata.title, stanzas: res.data, isCached: false });
       }
+      window.history.pushState({ appView: 'song' }, '');
     } catch (err) {
       if (offlineCache[songMetadata.id]) {
         const c = offlineCache[songMetadata.id];
@@ -473,6 +611,12 @@ function App() {
     setShowProfileSetup(false);
   };
 
+  const clearLocalSearchCache = () => {
+    setTabSearch({ db: '', web: '', favorites: '' });
+    setResults([]);
+    setSelectedLetter(null);
+  };
+
   // ---- Share Link ----
   const handleShareLink = () => {
     const tvUrl = `${API_BASE}/tv.html?room=${roomCode}`;
@@ -534,7 +678,13 @@ function App() {
     return (
       <div className="app-container" style={{ fontFamily: displayFont }}>
         <div className="app-header presentation-header">
-          <button className="back-btn" onClick={() => { setSelectedSong(null); setActiveStanza(null); }}>
+          <button className="back-btn" onClick={() => {
+            setSelectedSong(null);
+            setActiveStanza(null);
+            if (window.history.state?.appView === 'song') {
+              window.history.back();
+            }
+          }}>
             <FaArrowLeft />
           </button>
           <h1 style={{ flex: 1, textAlign: 'left', fontSize: '1.1rem', margin: 0 }}>{selectedSong.title}</h1>
@@ -634,6 +784,50 @@ function App() {
   }
 
   // ---- Main View ----
+  if (showSettings) {
+    return (
+      <div className="app-container">
+        <div className="app-header presentation-header">
+          <button className="back-btn" onClick={closeSettingsPage}>
+            <FaArrowLeft />
+          </button>
+          <h1 style={{ flex: 1, textAlign: 'left', fontSize: '1.1rem', margin: 0 }}>Settings</h1>
+        </div>
+
+        <div className="content-area">
+          <div className="stanza-card">
+            <h3 style={{ margin: 0 }}>Presenter Identity</h3>
+            <input
+              className="modal-input"
+              placeholder="Your Name"
+              value={userName}
+              onChange={e => setUserName(e.target.value)}
+            />
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Device: {deviceCode}</div>
+          </div>
+
+          <div className="stanza-card">
+            <h3 style={{ margin: 0 }}>TV Room</h3>
+            <div className="room-control settings-room-control">
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Room Code:</label>
+              <input type="text" className="room-input" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} />
+              <button className={`share-btn ${copiedLink ? 'copied' : ''}`} onClick={handleShareLink} title="Copy TV Link">
+                <FaShareAlt /> {copiedLink ? '✓' : ''}
+              </button>
+            </div>
+          </div>
+
+          <div className="stanza-card">
+            <h3 style={{ margin: 0 }}>Storage</h3>
+            <button className="clear-btn" onClick={clearLocalSearchCache}>
+              <FaTrash style={{ marginRight: 8 }} /> Clear Saved Search Text
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -642,11 +836,9 @@ function App() {
         <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
           User: {userName || 'Anonymous'} | Device: {deviceCode}
         </div>
-        <div className="room-control">
-          <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>TV Room: </label>
-          <input type="text" className="room-input" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} />
-          <button className={`share-btn ${copiedLink ? 'copied' : ''}`} onClick={handleShareLink} title="Copy TV Link">
-            <FaShareAlt /> {copiedLink ? '✓' : ''}
+        <div style={{ marginTop: 10 }}>
+          <button className="share-btn" onClick={openSettingsPage} title="Open Settings">
+            <FaCog style={{ marginRight: 6 }} /> Settings
           </button>
         </div>
         {!isOnline && (
@@ -657,15 +849,15 @@ function App() {
       {/* Tabs */}
       <div className="tabs">
         <button className={`tab-btn ${activeTab === 'db' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('db'); setResults([]); setSearchQuery(''); setSelectedLetter(null); }}>
+          onClick={() => { setActiveTab('db'); setResults([]); setSelectedLetter(null); }}>
           <FaDatabase style={{ marginRight: 6 }} />DB
         </button>
         <button className={`tab-btn ${activeTab === 'web' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('web'); setResults([]); setSearchQuery(''); }}>
+          onClick={() => { setActiveTab('web'); setResults([]); }}>
           <FaGlobe style={{ marginRight: 6 }} />Web
         </button>
         <button className={`tab-btn ${activeTab === 'favorites' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('favorites'); setSearchQuery(''); }}>
+          onClick={() => { setActiveTab('favorites'); }}>
           <FaStar style={{ marginRight: 6 }} />Favs
         </button>
       </div>
@@ -677,8 +869,8 @@ function App() {
             type="text"
             className="search-input"
             placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : 'Favorites'}...`}
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
+            value={tabSearch[activeTab] || ''}
+            onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
             onKeyDown={e => e.key === 'Enter' && handleSearch()}
           />
           <button className="btn" onClick={handleSearch} disabled={loading}><FaSearch /></button>
@@ -695,7 +887,7 @@ function App() {
                 key={letter}
                 className={`az-btn ${selectedLetter === letter ? 'active' : ''}`}
                 onClick={() => {
-                  if (letter === 'ALL') { setSelectedLetter(null); setResults([]); setSearchQuery(''); }
+                  if (letter === 'ALL') { setSelectedLetter(null); setResults([]); setTabSearch(prev => ({ ...prev, db: '' })); }
                   else handleLetterFilter(letter);
                 }}
               >{letter}</button>
@@ -741,7 +933,7 @@ function App() {
           </div>
         )}
 
-        {!loading && results.length === 0 && searchQuery && !selectedLetter && (
+        {!loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
           <div className="loading">No songs found.</div>
         )}
         {!loading && results.length === 0 && selectedLetter && (
