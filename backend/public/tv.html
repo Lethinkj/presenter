@@ -121,15 +121,7 @@
                     displayLyrics(data.text, data.fontSize);
                 } else if (data.type === 'clear') {
                     lyricsContainer.innerHTML = '';
-                    // Show room code again
-                    const div = document.createElement('div');
-                    div.id = 'room-code-display';
-                    div.style.color = '#444';
-                    div.style.fontSize = '3vw';
-                    div.style.marginTop = '20px';
-                    div.innerHTML = `Room Code: <span id="room-code-val">${roomId}</span>`;
-                    lyricsContainer.appendChild(div);
-                    statusElement.style.display = 'block'; // Show status again
+                    statusElement.style.display = 'none';
                 } else if (data.type === 'status' || data.type === 'error') {
                     console.log('Server message:', data.message);
                 }

@@ -188,6 +188,22 @@ body {
   display: flex;
   flex-direction: column;
   gap: 15px;
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+
+.stanza-card.presentable {
+  cursor: pointer;
+}
+
+.stanza-card.presentable:hover {
+  border-color: var(--primary-color);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+.stanza-card.presentable.active {
+  border-color: var(--success-color);
+  box-shadow: 0 0 0 1px var(--success-color);
 }
 
 .stanza-text {
@@ -195,6 +211,13 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   margin: 0;
+}
+
+.presented-indicator {
+  align-self: flex-end;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--success-color);
 }
 
 .present-btn {

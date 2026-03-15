@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
-import { FaSearch, FaArrowLeft, FaDesktop, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload } from 'react-icons/fa';
+import { FaSearch, FaArrowLeft, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload } from 'react-icons/fa';
 import { App as CapacitorApp } from '@capacitor/app';
 
 // Supabase
@@ -1374,7 +1374,31 @@ function App() {
   };
 
   // ---- Present / Clear ----
-  const presentLyrics = async (stanzaText, stanzaIndex) => {
+  const sendPresentationPayload = useCallback((payload) => {
+    if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
+      OfflinePresenter.present({
+        room: payload.room,
+        text: payload.text,
+        font: payload.font,
+        fontSize: payload.fontSize,
+        name: payload.name,
+        deviceCode: payload.deviceCode
+      }).catch(() => {
+        // fallback will happen on next tap through ws path if needed
+      });
+      return;
+    }
+
+    const socket = wsRef.current || ws;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(payload));
+    } else {
+      pendingPresentRef.current = payload;
+      ensureConnectedRef.current();
+    }
+  }, [nativeOfflineServer.running, ws]);
+
+  const presentLyrics = async (stanzaText, stanzaIndex, options = {}) => {
     const payload = {
       type: 'present',
       text: stanzaText,
@@ -1385,43 +1409,19 @@ function App() {
       deviceCode: deviceCodeRef.current
     };
 
-    const sendPayload = () => {
-      if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
-        OfflinePresenter.present({
-          room: roomCode,
-          text: stanzaText,
-          font: displayFont,
-          fontSize: displayFontSize,
-          name: userNameRef.current || 'Anonymous',
-          deviceCode: deviceCodeRef.current
-        }).catch(() => {
-          // fallback will happen on next tap through ws path if needed
-        });
-        return;
-      }
-
-      const socket = wsRef.current || ws;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(payload));
-      } else {
-        pendingPresentRef.current = payload;
-        ensureConnectedRef.current();
-      }
-    };
-
     setActiveStanza(stanzaIndex);
 
     // One-tap reliability: send immediately, then retry once shortly after.
     // If user taps another stanza, stale retry is ignored.
     const attemptId = ++presentAttemptRef.current;
-    sendPayload();
+    sendPresentationPayload(payload);
     setTimeout(() => {
       if (presentAttemptRef.current !== attemptId) return;
-      sendPayload();
+      sendPresentationPayload(payload);
     }, 220);
 
     // Auto-save web songs to DB
-    if (selectedSong && !selectedSong.isCached) {
+    if (!options.skipAutoSave && selectedSong && !selectedSong.isCached) {
       try {
         const res = await axios.post(`${apiBase}/save_song`, { title: selectedSong.title, stanzas: selectedSong.stanzas });
         const newId = res.data.songId;
@@ -1431,14 +1431,34 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    if (activeStanza === null || !selectedSong) return;
+    const stanzas = isEditingSong ? editableStanzas : (selectedSong.stanzas || []);
+    const activeText = stanzas[activeStanza];
+    if (typeof activeText !== 'string') return;
+
+    const payload = {
+      type: 'present',
+      text: activeText,
+      room: roomCode,
+      font: displayFont,
+      fontSize: displayFontSize,
+      name: userNameRef.current || 'Anonymous',
+      deviceCode: deviceCodeRef.current
+    };
+
+    sendPresentationPayload(payload);
+  }, [displayFont, displayFontSize, activeStanza, selectedSong, isEditingSong, editableStanzas, roomCode, sendPresentationPayload]);
+
   const clearScreen = () => {
+    setActiveStanza(null);
+
     if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
       OfflinePresenter.clear({
         room: roomCode,
         name: userNameRef.current || 'Anonymous',
         deviceCode: deviceCodeRef.current
       }).catch(() => {});
-      setActiveStanza(null);
       return;
     }
 
@@ -1450,7 +1470,6 @@ function App() {
         name: userNameRef.current || 'Anonymous',
         deviceCode: deviceCodeRef.current
       }));
-      setActiveStanza(null);
     }
   };
 
@@ -1673,7 +1692,19 @@ function App() {
           )}
 
           {displayStanzas.map((stanza, i) => (
-            <div key={i} className="stanza-card">
+            <div
+              key={i}
+              className={`stanza-card ${!isEditingSong ? 'presentable' : ''} ${activeStanza === i ? 'active' : ''}`}
+              onClick={!isEditingSong ? () => presentLyrics(stanza, i) : undefined}
+              onKeyDown={!isEditingSong ? (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  presentLyrics(stanza, i);
+                }
+              } : undefined}
+              role={!isEditingSong ? 'button' : undefined}
+              tabIndex={!isEditingSong ? 0 : undefined}
+            >
               {isEditingSong ? (
                 <div className="stanza-row">
                   <textarea
@@ -1689,12 +1720,7 @@ function App() {
               ) : (
                 <pre className="stanza-text" style={{ fontFamily: displayFont }}>{stanza}</pre>
               )}
-              <button
-                className={`present-btn ${activeStanza === i ? 'active' : ''}`}
-                onClick={() => presentLyrics(stanza, i)}
-              >
-                <FaDesktop /> {activeStanza === i ? 'Presented' : 'Present'}
-              </button>
+              {!isEditingSong && activeStanza === i && <div className="presented-indicator">Presented</div>}
             </div>
           ))}
           <button className="clear-btn" onClick={clearScreen}>Clear TV Screen</button>
