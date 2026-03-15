@@ -65,10 +65,11 @@ const loadTabSearchState = () => {
     return {
       db: parsed.db || '',
       web: parsed.web || '',
-      favorites: parsed.favorites || ''
+      favorites: parsed.favorites || '',
+      images: parsed.images || ''
     };
   } catch {
-    return { db: '', web: '', favorites: '' };
+    return { db: '', web: '', favorites: '', images: '' };
   }
 };
 
@@ -236,6 +237,48 @@ const readImageAsDataUrl = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
+const optimizeImageForPresent = async (file) => {
+  const originalDataUrl = await readImageAsDataUrl(file);
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const imageElement = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to decode image'));
+      img.src = objectUrl;
+    });
+
+    const width = imageElement.naturalWidth || 0;
+    const height = imageElement.naturalHeight || 0;
+    if (!width || !height) return originalDataUrl;
+
+    const MAX_DIMENSION = 1600;
+    const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) return originalDataUrl;
+
+    context.drawImage(imageElement, 0, 0, targetWidth, targetHeight);
+    const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.84);
+
+    // Keep the optimized image only when there is a meaningful size reduction.
+    if (optimizedDataUrl.length < originalDataUrl.length * 0.95) {
+      return optimizedDataUrl;
+    }
+    return originalDataUrl;
+  } catch {
+    return originalDataUrl;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeTab') || 'db');
   const [tabSearch, setTabSearch] = useState(() => loadTabSearchState());
@@ -301,7 +344,6 @@ function App() {
     return saved ? (saved === 'auto' ? 'auto' : Number(saved)) : 'auto';
   });
   const [showFontPicker, setShowFontPicker] = useState(false);
-  const [showImagePanel, setShowImagePanel] = useState(false);
   const [uploadedImages, setUploadedImages] = useState([]);
   const [activeImageId, setActiveImageId] = useState(null);
   const imageInputRef = useRef(null);
@@ -1183,6 +1225,7 @@ function App() {
   // ---- Search ----
   const handleSearch = async () => {
     const searchQuery = tabSearch[activeTab] || '';
+    if (activeTab === 'images') { setResults([]); return; }
     if (activeTab === 'favorites') { setResults(favorites); return; }
     if (!searchQuery.trim()) { setResults([]); return; }
     setLoading(true);
@@ -1460,11 +1503,12 @@ function App() {
     if (!imageItem?.dataUrl) return;
 
     const payload = {
-      type: 'present-image',
+      type: 'present',
       imageData: imageItem.dataUrl,
       imageName: imageItem.name,
       imageSize: displayImageSize,
       room: roomCode,
+      text: '',
       name: userNameRef.current || 'Anonymous',
       deviceCode: deviceCodeRef.current
     };
@@ -1500,7 +1544,7 @@ function App() {
     const selected = imageFiles.slice(0, 20);
     try {
       const mapped = await Promise.all(selected.map(async (file, index) => {
-        const dataUrl = await readImageAsDataUrl(file);
+        const dataUrl = await optimizeImageForPresent(file);
         return {
           id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
           name: file.name,
@@ -1509,7 +1553,6 @@ function App() {
       }));
 
       setUploadedImages(prev => [...mapped, ...prev].slice(0, 20));
-      setShowImagePanel(true);
     } catch {
       alert('Failed to read one or more images. Please try again.');
     } finally {
@@ -1554,11 +1597,12 @@ function App() {
     if (!imageItem?.dataUrl) return;
 
     const payload = {
-      type: 'present-image',
+      type: 'present',
       imageData: imageItem.dataUrl,
       imageName: imageItem.name,
       imageSize: displayImageSize,
       room: roomCode,
+      text: '',
       name: userNameRef.current || 'Anonymous',
       deviceCode: deviceCodeRef.current
     };
@@ -1659,7 +1703,7 @@ function App() {
   };
 
   const clearLocalSearchCache = () => {
-    setTabSearch({ db: '', web: '', favorites: '' });
+    setTabSearch({ db: '', web: '', favorites: '', images: '' });
     setResults([]);
     setSelectedLetter(null);
   };
@@ -1750,9 +1794,6 @@ function App() {
           <button className="icon-btn" title="Change Font" onClick={() => setShowFontPicker(f => !f)}>
             <FaFont />
           </button>
-          <button className={`icon-btn ${showImagePanel ? 'active' : ''}`} title="Share Images" onClick={() => setShowImagePanel(v => !v)}>
-            <FaImage />
-          </button>
         </div>
 
         {isEditingSong && (
@@ -1796,50 +1837,6 @@ function App() {
               <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.min(20, prev + 1))}>+</button>
               <span className="size-val">{displayFontSize === 'auto' ? 'Fitting' : `${displayFontSize}vw`}</span>
               <button className="done-btn" onClick={() => setShowFontPicker(false)}>Done</button>
-            </div>
-          </div>
-        )}
-
-        {showImagePanel && !isEditingSong && (
-          <div className="image-share-panel">
-            <div className="image-share-topbar">
-              <button className="btn-save" onClick={() => imageInputRef.current?.click()}>
-                <FaImage style={{ marginRight: 6 }} /> Upload Images
-              </button>
-              <span className="image-limit-text">Up to 20 at a time</span>
-              <input
-                ref={imageInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                style={{ display: 'none' }}
-                onChange={handleImageUpload}
-              />
-            </div>
-            <div className="size-picker image-size-picker">
-              <label>Image Size:</label>
-              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.max(20, prev - 5))}>-</button>
-              <button className={`size-btn auto-btn ${displayImageSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayImageSize('auto')}>Auto</button>
-              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.min(100, prev + 5))}>+</button>
-              <span className="size-val">{displayImageSize === 'auto' ? 'Fitting' : `${displayImageSize}%`}</span>
-            </div>
-
-            <div className="image-grid">
-              {uploadedImages.length === 0 ? (
-                <div className="image-empty">Upload images, then tap one to present it on TV.</div>
-              ) : (
-                uploadedImages.map(imageItem => (
-                  <button
-                    key={imageItem.id}
-                    className={`image-tile ${activeImageId === imageItem.id ? 'active' : ''}`}
-                    onClick={() => presentImage(imageItem)}
-                  >
-                    <img src={imageItem.dataUrl} alt={imageItem.name} className="image-thumb" />
-                    <span className="image-name">{imageItem.name}</span>
-                    {activeImageId === imageItem.id && <span className="image-presented-badge">Presented</span>}
-                  </button>
-                ))
-              )}
             </div>
           </div>
         )}
@@ -2134,24 +2131,77 @@ function App() {
           onClick={() => { setActiveTab('favorites'); }}>
           <FaStar style={{ marginRight: 6 }} />Favs
         </button>
+        <button className={`tab-btn ${activeTab === 'images' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('images'); setResults([]); setSelectedLetter(null); }}>
+          <FaImage style={{ marginRight: 6 }} />Images
+        </button>
       </div>
 
       <div className="content-area">
+        {activeTab === 'images' && (
+          <div className="image-share-panel">
+            <div className="image-share-topbar">
+              <button className="btn-save" onClick={() => imageInputRef.current?.click()}>
+                <FaImage style={{ marginRight: 6 }} /> Upload Images
+              </button>
+              <span className="image-limit-text">Up to 20 at a time</span>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={handleImageUpload}
+              />
+            </div>
+
+            <div className="size-picker image-size-picker">
+              <label>Image Size:</label>
+              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.max(20, prev - 5))}>-</button>
+              <button className={`size-btn auto-btn ${displayImageSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayImageSize('auto')}>Auto</button>
+              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.min(100, prev + 5))}>+</button>
+              <span className="size-val">{displayImageSize === 'auto' ? 'Fitting' : `${displayImageSize}%`}</span>
+            </div>
+
+            <div className="image-grid">
+              {uploadedImages.length === 0 ? (
+                <div className="image-empty">Upload images, then tap one to present it on TV.</div>
+              ) : (
+                uploadedImages.map(imageItem => (
+                  <button
+                    key={imageItem.id}
+                    className={`image-tile ${activeImageId === imageItem.id ? 'active' : ''}`}
+                    onClick={() => presentImage(imageItem)}
+                  >
+                    <img src={imageItem.dataUrl} alt={imageItem.name} className="image-thumb" />
+                    <span className="image-name">{imageItem.name}</span>
+                    {activeImageId === imageItem.id && <span className="image-presented-badge">Presented</span>}
+                  </button>
+                ))
+              )}
+            </div>
+
+            <button className="clear-btn" onClick={clearScreen}>Clear TV Screen</button>
+          </div>
+        )}
+
         {/* Search */}
-        <div className="search-container">
-          <input
-            type="text"
-            className="search-input"
-            placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : 'Favorites'}...`}
-            value={tabSearch[activeTab] || ''}
-            onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
-            onKeyDown={e => e.key === 'Enter' && handleSearch()}
-          />
-          <button className="btn" onClick={handleSearch} disabled={loading}><FaSearch /></button>
-          {activeTab === 'db' && (
-            <button className="add-btn" onClick={openAddModal} title="Add Song"><FaPlus /></button>
-          )}
-        </div>
+        {activeTab !== 'images' && (
+          <div className="search-container">
+            <input
+              type="text"
+              className="search-input"
+              placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : 'Favorites'}...`}
+              value={tabSearch[activeTab] || ''}
+              onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
+              onKeyDown={e => e.key === 'Enter' && handleSearch()}
+            />
+            <button className="btn" onClick={handleSearch} disabled={loading}><FaSearch /></button>
+            {activeTab === 'db' && (
+              <button className="add-btn" onClick={openAddModal} title="Add Song"><FaPlus /></button>
+            )}
+          </div>
+        )}
 
         {/* A-Z Filter */}
         {activeTab === 'db' && (
@@ -2169,9 +2219,9 @@ function App() {
           </div>
         )}
 
-        {loading && <div className="loading">Searching...</div>}
+        {activeTab !== 'images' && loading && <div className="loading">Searching...</div>}
 
-        {!loading && results.length > 0 && (
+        {activeTab !== 'images' && !loading && results.length > 0 && (
           <div className="song-list">
             {results.map((item, index) => {
               const isFav = favorites.some(f => f.title === item.title);
@@ -2207,10 +2257,10 @@ function App() {
           </div>
         )}
 
-        {!loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
+        {activeTab !== 'images' && !loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
           <div className="loading">No songs found.</div>
         )}
-        {!loading && results.length === 0 && selectedLetter && (
+        {activeTab !== 'images' && !loading && results.length === 0 && selectedLetter && (
           <div className="loading">No songs starting with "{selectedLetter}".</div>
         )}
       </div>

@@ -128,6 +128,11 @@
                     const roomDisplay = document.getElementById('room-code-display');
                     if (roomDisplay) roomDisplay.style.display = 'none';
                     statusElement.style.display = 'none'; // Also hide the connected status text to be clean
+
+                    if (data.imageData) {
+                        displayImage(data.imageData, data.imageSize);
+                        return;
+                    }
                     
                     // Apply font if sent
                     if (data.font) {
