@@ -257,11 +257,11 @@
 
             const parsed = parseFloat(String(currentImageSizeType));
             if (!Number.isNaN(parsed) && parsed > 0) {
-                const clamped = Math.max(10, Math.min(100, parsed));
+                const clamped = Math.max(10, Math.min(200, parsed));
                 currentImageElement.style.width = `${clamped}%`;
                 currentImageElement.style.height = 'auto';
-                currentImageElement.style.maxWidth = '98%';
-                currentImageElement.style.maxHeight = '98%';
+                currentImageElement.style.maxWidth = 'none';
+                currentImageElement.style.maxHeight = 'none';
             } else {
                 currentImageSizeType = 'auto';
                 applyImageSize();

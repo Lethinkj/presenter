@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
-import { FaSearch, FaArrowLeft, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload, FaImage } from 'react-icons/fa';
+import { FaSearch, FaArrowLeft, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload, FaImage, FaBook, FaHistory } from 'react-icons/fa';
 import { App as CapacitorApp } from '@capacitor/app';
 
 // Supabase
@@ -66,10 +66,12 @@ const loadTabSearchState = () => {
       db: parsed.db || '',
       web: parsed.web || '',
       favorites: parsed.favorites || '',
-      images: parsed.images || ''
+      images: parsed.images || '',
+      bible: parsed.bible || '',
+      recents: parsed.recents || ''
     };
   } catch {
-    return { db: '', web: '', favorites: '', images: '' };
+    return { db: '', web: '', favorites: '', images: '', bible: '', recents: '' };
   }
 };
 
@@ -346,9 +348,21 @@ function App() {
   const [showFontPicker, setShowFontPicker] = useState(false);
   const [uploadedImages, setUploadedImages] = useState([]);
   const [activeImageId, setActiveImageId] = useState(null);
+  const [imageRemoveMode, setImageRemoveMode] = useState(false);
   const imageInputRef = useRef(null);
+  const [bibleBooks, setBibleBooks] = useState([]);
+  const [selectedBibleBook, setSelectedBibleBook] = useState(null);
+  const [selectedBibleChapterIndex, setSelectedBibleChapterIndex] = useState(0);
+  const [bibleLoading, setBibleLoading] = useState(false);
+  const [bibleError, setBibleError] = useState('');
+  const [activeBibleVerseKey, setActiveBibleVerseKey] = useState('');
+  const [activeBibleVerseText, setActiveBibleVerseText] = useState('');
+  const [showBibleControls, setShowBibleControls] = useState(false);
+  const bibleSwipeStartXRef = useRef(null);
+  const bibleVerseListRef = useRef(null);
   const lastFontSyncRef = useRef({ initialized: false, font: '', size: '' });
   const lastImageSizeSyncRef = useRef({ initialized: false, size: '' });
+  const lastBibleFontSyncRef = useRef({ initialized: false, font: '', size: '', verseKey: '' });
 
   // Add Song Modal
   const [showAddModal, setShowAddModal] = useState(false);
@@ -362,6 +376,10 @@ function App() {
   // Favorites & Offline Cache
   const [favorites, setFavorites] = useState(() => {
     try { return JSON.parse(localStorage.getItem('worship_favorites')) || []; }
+    catch { return []; }
+  });
+  const [recentSongs, setRecentSongs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('worship_recent_songs')) || []; }
     catch { return []; }
   });
   const [offlineCache, setOfflineCache] = useState(() => {
@@ -585,6 +603,7 @@ function App() {
     }
   }, [userName]);
   useEffect(() => { localStorage.setItem('worship_favorites', JSON.stringify(favorites)); }, [favorites]);
+  useEffect(() => { localStorage.setItem('worship_recent_songs', JSON.stringify(recentSongs)); }, [recentSongs]);
   useEffect(() => { localStorage.setItem('worship_offline_cache', JSON.stringify(offlineCache)); }, [offlineCache]);
   useEffect(() => { localStorage.setItem('worship_pending_sync_queue', JSON.stringify(pendingSyncQueue)); }, [pendingSyncQueue]);
   useEffect(() => { localStorage.setItem('displayFont', displayFont); }, [displayFont]);
@@ -602,12 +621,13 @@ function App() {
       pendingSyncQueue,
       roomCode,
       userName: userName || '',
+      recentSongs,
       serverHost: cleanedServerHost,
       serverPort: cleanedServerPort
     };
     localStorage.setItem(LOCAL_DATA_SNAPSHOT_KEY, JSON.stringify(snapshot));
     setLocalSnapshotSavedAt(snapshot.savedAt);
-  }, [favorites, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort]);
+  }, [favorites, recentSongs, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort]);
 
   useEffect(() => {
     loadOfflineDataFromDevice();
@@ -1225,8 +1245,21 @@ function App() {
   // ---- Search ----
   const handleSearch = async () => {
     const searchQuery = tabSearch[activeTab] || '';
-    if (activeTab === 'images') { setResults([]); return; }
+    if (activeTab === 'images' || activeTab === 'bible') { setResults([]); return; }
     if (activeTab === 'favorites') { setResults(favorites); return; }
+    if (activeTab === 'recents') {
+      if (!searchQuery.trim()) {
+        setResults(recentSongs);
+      } else {
+        const tokens = searchQuery.toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
+        const filtered = recentSongs.filter(item => {
+          const title = String(item.title || '').toLowerCase();
+          return tokens.every(t => title.includes(t));
+        });
+        setResults(rankByRelatedness(filtered, searchQuery));
+      }
+      return;
+    }
     if (!searchQuery.trim()) { setResults([]); return; }
     setLoading(true);
     setResults([]);
@@ -1285,12 +1318,45 @@ function App() {
   };
 
   useEffect(() => {
-    if (activeTab === 'favorites') handleSearch();
-  }, [activeTab, favorites]);
+    if (activeTab === 'favorites' || activeTab === 'recents') handleSearch();
+  }, [activeTab, favorites, recentSongs]);
+
+  // Live search for DB tab while typing.
+  useEffect(() => {
+    if (activeTab !== 'db') return;
+    if (selectedLetter) return;
+
+    const query = tabSearch.db || '';
+    if (!query.trim()) {
+      setResults([]);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      handleSearch();
+    }, 220);
+
+    return () => clearTimeout(timer);
+  }, [activeTab, tabSearch.db, selectedLetter]);
 
   // ---- Song Select ----
   const handleSongSelect = async (songMetadata) => {
     setLoading(true);
+
+    const recentItem = {
+      title: songMetadata.title,
+      source: songMetadata.source,
+      id: songMetadata.id,
+      url: songMetadata.url,
+      offline: !!songMetadata.offline
+    };
+    setRecentSongs(prev => {
+      const keyOf = (item) => `${item.source || ''}:${item.id || item.url || item.title || ''}`;
+      const targetKey = keyOf(recentItem);
+      const deduped = prev.filter(item => keyOf(item) !== targetKey);
+      return [recentItem, ...deduped].slice(0, 20);
+    });
+
     try {
       if (songMetadata.source === 'db') {
         let stanzasData = [];
@@ -1526,6 +1592,13 @@ function App() {
     }
   };
 
+  const removeUploadedImage = (imageId) => {
+    setUploadedImages(prev => prev.filter(item => item.id !== imageId));
+    if (activeImageId === imageId) {
+      setActiveImageId(null);
+    }
+  };
+
   const handleImageUpload = async (event) => {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
@@ -1537,11 +1610,18 @@ function App() {
       return;
     }
 
-    if (files.length > 20 || imageFiles.length > 20) {
-      alert('You can upload up to 20 images at a time. Only the first 20 images will be added.');
+    const availableSlots = Math.max(0, 20 - uploadedImages.length);
+    if (availableSlots <= 0) {
+      alert('Maximum 20 images reached. Remove some images to add new ones.');
+      event.target.value = '';
+      return;
     }
 
-    const selected = imageFiles.slice(0, 20);
+    if (imageFiles.length > availableSlots) {
+      alert(`Only ${availableSlots} more image(s) can be added (max 20 total).`);
+    }
+
+    const selected = imageFiles.slice(0, availableSlots);
     try {
       const mapped = await Promise.all(selected.map(async (file, index) => {
         const dataUrl = await optimizeImageForPresent(file);
@@ -1552,13 +1632,163 @@ function App() {
         };
       }));
 
-      setUploadedImages(prev => [...mapped, ...prev].slice(0, 20));
+      setUploadedImages(prev => [...prev, ...mapped]);
     } catch {
       alert('Failed to read one or more images. Please try again.');
     } finally {
       event.target.value = '';
     }
   };
+
+  const openBibleBook = async (bookMeta) => {
+    if (!bookMeta?.english) return;
+    setBibleLoading(true);
+    setBibleError('');
+
+    try {
+      const fileName = encodeURIComponent(bookMeta.english) + '.json';
+      const response = await fetch(`/bible/${fileName}`);
+      if (!response.ok) throw new Error('Failed to load book data');
+      const data = await response.json();
+      const chapters = Array.isArray(data?.chapters) ? data.chapters : [];
+
+      setSelectedBibleBook({
+        english: data?.book?.english || bookMeta.english,
+        tamil: data?.book?.tamil || bookMeta.tamil,
+        chapters
+      });
+      setSelectedBibleChapterIndex(0);
+      setActiveBibleVerseKey('');
+      setActiveBibleVerseText('');
+      setShowBibleControls(false);
+    } catch {
+      setBibleError('Failed to load selected book.');
+    } finally {
+      setBibleLoading(false);
+    }
+  };
+
+  const presentBibleVerse = (verseText, verseNumber) => {
+    const cleanText = String(verseText || '').trim();
+    if (!cleanText) return;
+
+    const chapterNumber = Number(selectedBibleChapterIndex) + 1;
+    const payload = {
+      type: 'present',
+      text: cleanText,
+      room: roomCode,
+      font: displayFont,
+      fontSize: displayFontSize,
+      name: userNameRef.current || 'Anonymous',
+      deviceCode: deviceCodeRef.current
+    };
+
+    setActiveStanza(null);
+    setActiveImageId(null);
+    setActiveBibleVerseKey(`${selectedBibleBook?.english || ''}-${chapterNumber}-${verseNumber}`);
+    setActiveBibleVerseText(cleanText);
+
+    const attemptId = ++presentAttemptRef.current;
+    const sentImmediately = sendPresentationPayload(payload);
+    if (!sentImmediately) {
+      setTimeout(() => {
+        if (presentAttemptRef.current !== attemptId) return;
+        sendPresentationPayload(payload);
+      }, 220);
+    }
+  };
+
+  const goToBibleChapter = useCallback((nextIndex) => {
+    if (!selectedBibleBook) return;
+    const total = Array.isArray(selectedBibleBook.chapters) ? selectedBibleBook.chapters.length : 0;
+    if (!total) return;
+    const bounded = Math.max(0, Math.min(total - 1, nextIndex));
+    setSelectedBibleChapterIndex(bounded);
+    setActiveBibleVerseKey('');
+    setActiveBibleVerseText('');
+  }, [selectedBibleBook]);
+
+  const handleBibleSwipeStart = (event) => {
+    bibleSwipeStartXRef.current = event.changedTouches?.[0]?.clientX ?? null;
+  };
+
+  const handleBibleSwipeEnd = (event) => {
+    const startX = bibleSwipeStartXRef.current;
+    const endX = event.changedTouches?.[0]?.clientX ?? null;
+    bibleSwipeStartXRef.current = null;
+    if (startX === null || endX === null) return;
+
+    const deltaX = endX - startX;
+    if (Math.abs(deltaX) < 42) return;
+
+    // Requested flow update: swipe right -> previous chapter, swipe left -> next chapter.
+    if (deltaX > 0) {
+      goToBibleChapter(selectedBibleChapterIndex - 1);
+    } else {
+      goToBibleChapter(selectedBibleChapterIndex + 1);
+    }
+  };
+
+  const handleBibleVerseSelect = (verseNo) => {
+    if (!selectedBibleBook) return;
+    const chapter = selectedBibleBook.chapters?.[selectedBibleChapterIndex];
+    const verses = Array.isArray(chapter?.verses) ? chapter.verses : [];
+    const selected = verses.find((item, idx) => String(item?.verse || idx + 1) === String(verseNo));
+    if (!selected) return;
+
+    const key = `${selectedBibleBook.english || ''}-${selectedBibleChapterIndex + 1}-${String(verseNo)}`;
+    setActiveBibleVerseKey(key);
+    presentBibleVerse(selected?.text || '', String(verseNo));
+    setShowBibleControls(false);
+
+    requestAnimationFrame(() => {
+      const container = bibleVerseListRef.current;
+      if (!container) return;
+      const target = container.querySelector(`[data-verse-key="${key}"]`);
+      if (target && typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'bible') return;
+    if (bibleBooks.length > 0) return;
+
+    setBibleLoading(true);
+    setBibleError('');
+
+    fetch('/bible/Books.json')
+      .then(response => {
+        if (!response.ok) throw new Error('Failed to load book list');
+        return response.json();
+      })
+      .then(data => {
+        const mapped = Array.isArray(data)
+          ? data.map((entry, index) => ({
+            id: String(index + 1),
+            english: String(entry?.book?.english || '').trim(),
+            tamil: String(entry?.book?.tamil || '').trim()
+          })).filter(item => item.english)
+          : [];
+
+        setBibleBooks(mapped);
+      })
+      .catch(() => {
+        setBibleError('Failed to load Bible list.');
+      })
+      .finally(() => {
+        setBibleLoading(false);
+      });
+  }, [activeTab, bibleBooks.length]);
+
+  useEffect(() => {
+    if (activeTab !== 'bible') return;
+    if (selectedBibleBook) return;
+    if (bibleBooks.length === 0) return;
+
+    openBibleBook(bibleBooks[0]);
+  }, [activeTab, bibleBooks, selectedBibleBook]);
 
   useEffect(() => {
     if (activeStanza === null || !selectedSong) return;
@@ -1610,9 +1840,37 @@ function App() {
     sendPresentationPayload(payload, { allowNative: false });
   }, [displayImageSize, activeImageId, uploadedImages, roomCode, sendPresentationPayload]);
 
+  useEffect(() => {
+    if (!activeBibleVerseKey || !activeBibleVerseText) return;
+
+    const previous = lastBibleFontSyncRef.current;
+    const fontChanged = previous.initialized && (previous.font !== displayFont || previous.size !== String(displayFontSize));
+    lastBibleFontSyncRef.current = {
+      initialized: true,
+      font: displayFont,
+      size: String(displayFontSize),
+      verseKey: activeBibleVerseKey
+    };
+    if (!fontChanged) return;
+
+    const payload = {
+      type: 'present',
+      text: activeBibleVerseText,
+      room: roomCode,
+      font: displayFont,
+      fontSize: displayFontSize,
+      name: userNameRef.current || 'Anonymous',
+      deviceCode: deviceCodeRef.current
+    };
+
+    sendPresentationPayload(payload);
+  }, [activeBibleVerseKey, activeBibleVerseText, displayFont, displayFontSize, roomCode, sendPresentationPayload]);
+
   const clearScreen = () => {
     setActiveStanza(null);
     setActiveImageId(null);
+    setActiveBibleVerseKey('');
+    setActiveBibleVerseText('');
 
     if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
       OfflinePresenter.clear({
@@ -1703,7 +1961,7 @@ function App() {
   };
 
   const clearLocalSearchCache = () => {
-    setTabSearch({ db: '', web: '', favorites: '', images: '' });
+    setTabSearch({ db: '', web: '', favorites: '', images: '', bible: '', recents: '' });
     setResults([]);
     setSelectedLetter(null);
   };
@@ -1794,16 +2052,22 @@ function App() {
           <button className="icon-btn" title="Change Font" onClick={() => setShowFontPicker(f => !f)}>
             <FaFont />
           </button>
+          <button className="mini-clear-btn" title="Clear TV Screen" onClick={clearScreen}>
+            Clear
+          </button>
         </div>
 
         {isEditingSong && (
           <div className="song-edit-panel">
-            <input
-              className="modal-input"
-              placeholder="Song Title"
-              value={editTitle}
-              onChange={e => setEditTitle(e.target.value)}
-            />
+            <div className="input-clear-wrap">
+              <input
+                className="modal-input"
+                placeholder="Song Title"
+                value={editTitle}
+                onChange={e => setEditTitle(e.target.value)}
+              />
+              {!!editTitle && <button className="text-clear-btn" onClick={() => setEditTitle('')}>Clear</button>}
+            </div>
             <div className="song-edit-actions">
               <button className="add-stanza-btn" onClick={addEditableStanza}>+ Add Stanza</button>
               <button className="btn-cancel" onClick={() => {
@@ -1868,12 +2132,15 @@ function App() {
             >
               {isEditingSong ? (
                 <div className="stanza-row">
-                  <textarea
-                    className="stanza-textarea"
-                    rows={4}
-                    value={stanza}
-                    onChange={e => updateEditableStanza(i, e.target.value)}
-                  />
+                  <div className="input-clear-wrap">
+                    <textarea
+                      className="stanza-textarea"
+                      rows={4}
+                      value={stanza}
+                      onChange={e => updateEditableStanza(i, e.target.value)}
+                    />
+                    {!!stanza && <button className="text-clear-btn" onClick={() => updateEditableStanza(i, '')}>Clear</button>}
+                  </div>
                   {displayStanzas.length > 1 && (
                     <button className="remove-stanza" onClick={() => removeEditableStanza(i)}>✕</button>
                   )}
@@ -1884,7 +2151,6 @@ function App() {
               {!isEditingSong && activeStanza === i && <div className="presented-indicator">Presented</div>}
             </div>
           ))}
-          <button className="clear-btn" onClick={clearScreen}>Clear TV Screen</button>
         </div>
       </div>
     );
@@ -2099,6 +2365,11 @@ function App() {
     );
   }
 
+  const selectedBibleChapter = selectedBibleBook?.chapters?.[selectedBibleChapterIndex] || null;
+  const bibleVerses = Array.isArray(selectedBibleChapter?.verses) ? selectedBibleChapter.verses : [];
+  const bibleChapterNumber = Number(selectedBibleChapter?.chapter || (selectedBibleChapterIndex + 1));
+  const activeBibleVerseNumber = activeBibleVerseKey ? activeBibleVerseKey.split('-').slice(-1)[0] : '';
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -2107,7 +2378,7 @@ function App() {
         <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
           User: {userName || 'Anonymous'} | Device: {deviceCode}
         </div>
-        <div style={{ marginTop: 10 }}>
+        <div className="header-actions">
           <button className="share-btn" onClick={openSettingsPage} title="Open Settings">
             <FaCog style={{ marginRight: 6 }} /> Settings
           </button>
@@ -2131,9 +2402,17 @@ function App() {
           onClick={() => { setActiveTab('favorites'); }}>
           <FaStar style={{ marginRight: 6 }} />Favs
         </button>
+        <button className={`tab-btn ${activeTab === 'recents' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('recents'); }}>
+          <FaHistory style={{ marginRight: 6 }} />Recents
+        </button>
         <button className={`tab-btn ${activeTab === 'images' ? 'active' : ''}`}
           onClick={() => { setActiveTab('images'); setResults([]); setSelectedLetter(null); }}>
           <FaImage style={{ marginRight: 6 }} />Images
+        </button>
+        <button className={`tab-btn ${activeTab === 'bible' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('bible'); setResults([]); setSelectedLetter(null); }}>
+          <FaBook style={{ marginRight: 6 }} />Bible
         </button>
       </div>
 
@@ -2144,7 +2423,15 @@ function App() {
               <button className="btn-save" onClick={() => imageInputRef.current?.click()}>
                 <FaImage style={{ marginRight: 6 }} /> Upload Images
               </button>
-              <span className="image-limit-text">Up to 20 at a time</span>
+              <button
+                className={`image-remove-mode-btn ${imageRemoveMode ? 'active' : ''}`}
+                onClick={() => setImageRemoveMode(v => !v)}
+                title="Toggle remove mode"
+              >
+                {imageRemoveMode ? 'Done' : 'Remove'}
+              </button>
+              <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
+              <span className="image-limit-text">{uploadedImages.length}/20 images</span>
               <input
                 ref={imageInputRef}
                 type="file"
@@ -2159,7 +2446,7 @@ function App() {
               <label>Image Size:</label>
               <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.max(20, prev - 5))}>-</button>
               <button className={`size-btn auto-btn ${displayImageSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayImageSize('auto')}>Auto</button>
-              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.min(100, prev + 5))}>+</button>
+              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.min(200, prev + 5))}>+</button>
               <span className="size-val">{displayImageSize === 'auto' ? 'Fitting' : `${displayImageSize}%`}</span>
             </div>
 
@@ -2171,8 +2458,23 @@ function App() {
                   <button
                     key={imageItem.id}
                     className={`image-tile ${activeImageId === imageItem.id ? 'active' : ''}`}
-                    onClick={() => presentImage(imageItem)}
+                    onClick={() => {
+                      if (!imageRemoveMode) presentImage(imageItem);
+                    }}
                   >
+                    {imageRemoveMode && (
+                      <button
+                        className="image-remove-btn"
+                        title="Remove image"
+                        aria-label="Remove image"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeUploadedImage(imageItem.id);
+                        }}
+                      >
+                        ×
+                      </button>
+                    )}
                     <img src={imageItem.dataUrl} alt={imageItem.name} className="image-thumb" />
                     <span className="image-name">{imageItem.name}</span>
                     {activeImageId === imageItem.id && <span className="image-presented-badge">Presented</span>}
@@ -2180,22 +2482,165 @@ function App() {
                 ))
               )}
             </div>
+          </div>
+        )}
 
-            <button className="clear-btn" onClick={clearScreen}>Clear TV Screen</button>
+        {activeTab === 'bible' && (
+          <div className="bible-panel">
+            {bibleLoading && <div className="loading">Loading Bible...</div>}
+            {!bibleLoading && bibleError && <div className="bible-error">{bibleError}</div>}
+
+            {!bibleLoading && !bibleError && selectedBibleBook && (
+              <>
+                <div className="bible-top-controls">
+                  <div className="bible-top-row">
+                    <button className="bible-book-title-btn" onClick={() => setShowBibleControls(v => !v)} type="button">
+                      {(selectedBibleBook.tamil || selectedBibleBook.english)} {`- ${bibleChapterNumber}`}
+                    </button>
+                    <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
+                      <FaFont style={{ marginRight: 6 }} /> Font
+                    </button>
+                    <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
+                  </div>
+
+                  {showBibleControls && (
+                    <div className="bible-controls-dropdown">
+                      <select
+                        className="bible-select"
+                        value={selectedBibleBook.english}
+                        onChange={(event) => {
+                          const nextBook = bibleBooks.find(item => item.english === event.target.value);
+                          if (nextBook) openBibleBook(nextBook);
+                        }}
+                      >
+                        {bibleBooks.map(bookItem => (
+                          <option key={bookItem.id} value={bookItem.english}>
+                            {bookItem.tamil || bookItem.english}
+                          </option>
+                        ))}
+                      </select>
+
+                      <div className="bible-inline-selects">
+                        <select
+                          className="bible-select"
+                          value={String(bibleChapterNumber)}
+                          onChange={(event) => {
+                            const chapter = Number(event.target.value);
+                            if (!Number.isNaN(chapter)) {
+                              goToBibleChapter(chapter - 1);
+                            }
+                          }}
+                        >
+                          {(selectedBibleBook.chapters || []).map((chapterItem, idx) => {
+                            const chapterNo = String(chapterItem?.chapter || (idx + 1));
+                            return (
+                              <option key={`${selectedBibleBook.english}-chapter-${chapterNo}`} value={chapterNo}>
+                                Chapter {chapterNo}
+                              </option>
+                            );
+                          })}
+                        </select>
+
+                        <select
+                          className="bible-select"
+                          value={activeBibleVerseNumber || ''}
+                          onChange={(event) => {
+                            if (event.target.value) {
+                              handleBibleVerseSelect(event.target.value);
+                            }
+                          }}
+                        >
+                          <option value="">Verse</option>
+                          {bibleVerses.map((verseItem, idx) => {
+                            const verseNo = String(verseItem?.verse || idx + 1);
+                            return (
+                              <option key={`${selectedBibleBook.english}-verse-${verseNo}`} value={verseNo}>
+                                Verse {verseNo}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {showFontPicker && (
+                  <div className="font-picker-container">
+                    <div className="font-picker">
+                      {FONTS.map(f => (
+                        <button
+                          key={f.value}
+                          className={`font-opt ${displayFont === f.value ? 'active' : ''}`}
+                          style={{ fontFamily: f.value }}
+                          onClick={() => setDisplayFont(f.value)}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="size-picker">
+                      <label>TV Size:</label>
+                      <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.max(2, prev - 1))}>-</button>
+                      <button className={`size-btn auto-btn ${displayFontSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayFontSize('auto')}>Auto</button>
+                      <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.min(20, prev + 1))}>+</button>
+                      <span className="size-val">{displayFontSize === 'auto' ? 'Fitting' : `${displayFontSize}vw`}</span>
+                      <button className="done-btn" onClick={() => setShowFontPicker(false)}>Done</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bible-swipe-hint">Swipe right for previous chapter, swipe left for next chapter.</div>
+
+                <div
+                  ref={bibleVerseListRef}
+                  className="bible-verse-list"
+                  onTouchStart={handleBibleSwipeStart}
+                  onTouchEnd={handleBibleSwipeEnd}
+                >
+                  {bibleVerses.map((verseItem, idx) => {
+                    const verseNo = String(verseItem?.verse || idx + 1);
+                    const verseKey = `${selectedBibleBook.english || ''}-${selectedBibleChapterIndex + 1}-${verseNo}`;
+                    return (
+                      <button
+                        key={verseKey}
+                        data-verse-key={verseKey}
+                        className={`bible-verse-btn ${activeBibleVerseKey === verseKey ? 'active' : ''}`}
+                        onClick={() => presentBibleVerse(verseItem?.text || '', verseNo)}
+                      >
+                        <span className="bible-verse-no">{verseNo}</span>
+                        <span className="bible-verse-text">{verseItem?.text || ''}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+              </>
+            )}
           </div>
         )}
 
         {/* Search */}
-        {activeTab !== 'images' && (
+        {activeTab !== 'images' && activeTab !== 'bible' && (
           <div className="search-container">
-            <input
-              type="text"
-              className="search-input"
-              placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : 'Favorites'}...`}
-              value={tabSearch[activeTab] || ''}
-              onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
-              onKeyDown={e => e.key === 'Enter' && handleSearch()}
-            />
+            <div className="input-clear-wrap search-wrap">
+              <input
+                type="text"
+                className="search-input"
+                placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : activeTab === 'recents' ? 'Recents' : 'Favorites'}...`}
+                value={tabSearch[activeTab] || ''}
+                onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && handleSearch()}
+              />
+              {!!(tabSearch[activeTab] || '') && (
+                <button
+                  className="text-clear-btn"
+                  onClick={() => setTabSearch(prev => ({ ...prev, [activeTab]: '' }))}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
             <button className="btn" onClick={handleSearch} disabled={loading}><FaSearch /></button>
             {activeTab === 'db' && (
               <button className="add-btn" onClick={openAddModal} title="Add Song"><FaPlus /></button>
@@ -2219,9 +2664,9 @@ function App() {
           </div>
         )}
 
-        {activeTab !== 'images' && loading && <div className="loading">Searching...</div>}
+        {activeTab !== 'images' && activeTab !== 'bible' && loading && <div className="loading">Searching...</div>}
 
-        {activeTab !== 'images' && !loading && results.length > 0 && (
+        {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length > 0 && (
           <div className="song-list">
             {results.map((item, index) => {
               const isFav = favorites.some(f => f.title === item.title);
@@ -2257,10 +2702,10 @@ function App() {
           </div>
         )}
 
-        {activeTab !== 'images' && !loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
+        {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
           <div className="loading">No songs found.</div>
         )}
-        {activeTab !== 'images' && !loading && results.length === 0 && selectedLetter && (
+        {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length === 0 && selectedLetter && (
           <div className="loading">No songs starting with "{selectedLetter}".</div>
         )}
       </div>
@@ -2277,6 +2722,7 @@ function App() {
               value={addTitle}
               onChange={e => setAddTitle(e.target.value)}
             />
+            {!!addTitle && <button className="text-clear-btn inline-clear-btn" onClick={() => setAddTitle('')}>Clear</button>}
 
             {/* Mode Toggle */}
             <div className="mode-toggle">
@@ -2299,6 +2745,7 @@ function App() {
                       onChange={e => updateManualStanza(i, e.target.value)}
                       rows={3}
                     />
+                    {!!stanza && <button className="text-clear-btn" onClick={() => updateManualStanza(i, '')}>Clear</button>}
                     {manualStanzas.length > 1 && (
                       <button className="remove-stanza" onClick={() => removeManualStanza(i)}>✕</button>
                     )}
@@ -2318,6 +2765,7 @@ function App() {
                   value={autoText}
                   onChange={e => setAutoText(e.target.value)}
                 />
+                {!!autoText && <button className="text-clear-btn inline-clear-btn" onClick={() => setAutoText('')}>Clear</button>}
                 {autoText && (
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: 4 }}>
                     Preview: {autoText.split(/\n\s*\n/).filter(s => s.trim()).length} stanza(s) detected
@@ -2351,6 +2799,7 @@ function App() {
               value={profileNameInput}
               onChange={e => setProfileNameInput(e.target.value)}
             />
+            {!!profileNameInput && <button className="text-clear-btn inline-clear-btn" onClick={() => setProfileNameInput('')}>Clear</button>}
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
               Device Code: {deviceCode}
             </p>
