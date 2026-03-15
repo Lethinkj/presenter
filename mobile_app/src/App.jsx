@@ -32,6 +32,21 @@ const normalizeWsUrl = (url) => {
   return url;
 };
 
+const buildRoomScopedWsUrl = (baseWsUrl, room) => {
+  const safeRoom = String(room || 'DEFAULT').trim() || 'DEFAULT';
+
+  try {
+    const parsed = new URL(baseWsUrl);
+    parsed.pathname = '/ws';
+    parsed.searchParams.set('room', safeRoom);
+    return parsed.toString();
+  } catch {
+    const normalizedBase = String(baseWsUrl || '').replace(/\/+$/, '');
+    const separator = normalizedBase.includes('?') ? '&' : '?';
+    return `${normalizedBase}/ws${separator}room=${encodeURIComponent(safeRoom)}`;
+  }
+};
+
 export const API_BASE = API_BASE_NORMALIZED || (SERVER_IP ? `http://${SERVER_IP}:3000` : 'http://localhost:3000');
 export const WS_URL = normalizeWsUrl(
   PROD_WS || (API_BASE_NORMALIZED ? API_BASE_NORMALIZED.replace(/^http/, 'ws') : (SERVER_IP ? `ws://${SERVER_IP}:3000` : 'ws://localhost:3000'))
@@ -406,6 +421,7 @@ function App() {
   const [autoDetectingLan, setAutoDetectingLan] = useState(false);
   const [startingOfflinePresent, setStartingOfflinePresent] = useState(false);
   const [nativeOfflineServer, setNativeOfflineServer] = useState({ running: false, host: '', port: 3000, url: '' });
+  const [useLanApi, setUseLanApi] = useState(() => localStorage.getItem('presenterUseLanApi') === 'true');
 
   // Connection config for LAN/hotspot use.
   const [serverHost, setServerHost] = useState(() => localStorage.getItem('presenterServerHost') || '');
@@ -419,10 +435,11 @@ function App() {
   }, [serverPort]);
 
   const apiBase = useMemo(() => {
+    // Keep internet API as default; LAN override is opt-in.
+    if (useLanApi && cleanedServerHost) return `http://${cleanedServerHost}:${cleanedServerPort}`;
     if (API_BASE_NORMALIZED) return API_BASE_NORMALIZED;
-    if (cleanedServerHost) return `http://${cleanedServerHost}:${cleanedServerPort}`;
     return API_BASE;
-  }, [cleanedServerHost, cleanedServerPort]);
+  }, [useLanApi, cleanedServerHost, cleanedServerPort]);
 
   const detectedLanHost = useMemo(() => {
     if (cleanedServerHost) return cleanedServerHost;
@@ -611,6 +628,7 @@ function App() {
   useEffect(() => { localStorage.setItem('displayImageSize', displayImageSize); }, [displayImageSize]);
   useEffect(() => { localStorage.setItem('presenterServerHost', cleanedServerHost); }, [cleanedServerHost]);
   useEffect(() => { localStorage.setItem('presenterServerPort', cleanedServerPort); }, [cleanedServerPort]);
+  useEffect(() => { localStorage.setItem('presenterUseLanApi', useLanApi ? 'true' : 'false'); }, [useLanApi]);
   useEffect(() => { localStorage.setItem('nativeFileStorageEnabled', nativeFileStorageEnabled ? 'true' : 'false'); }, [nativeFileStorageEnabled]);
 
   useEffect(() => {
@@ -1024,6 +1042,17 @@ function App() {
         name: userNameRef.current || 'Anonymous',
         deviceCode: deviceCodeRef.current
       }));
+
+      // Native offline socket routing is room-bound from URL query.
+      // Reconnect when room changes so image messages go to the selected room.
+      try {
+        const connectedRoom = new URL(socket.url).searchParams.get('room') || '';
+        if (connectedRoom.toUpperCase() !== String(roomCode || '').toUpperCase()) {
+          socket.close();
+        }
+      } catch {
+        // no-op
+      }
     }
   }, [roomCode, userName, deviceCode]);
 
@@ -1069,7 +1098,7 @@ function App() {
         try { existing.close(); } catch { /* no-op */ }
       }
 
-      const socket = new WebSocket(WS_URL);
+      const socket = new WebSocket(buildRoomScopedWsUrl(WS_URL, roomCodeRef.current));
       wsRef.current = socket;
       setWs(socket);
 
@@ -1510,6 +1539,9 @@ function App() {
         text: payload.text,
         font: payload.font,
         fontSize: payload.fontSize,
+        imageData: payload.imageData,
+        imageName: payload.imageName,
+        imageSize: payload.imageSize,
         name: payload.name,
         deviceCode: payload.deviceCode
       }).catch(() => {
@@ -1583,11 +1615,11 @@ function App() {
     setActiveStanza(null);
 
     const attemptId = ++presentAttemptRef.current;
-    const sentImmediately = sendPresentationPayload(payload, { allowNative: false });
+    const sentImmediately = sendPresentationPayload(payload);
     if (!sentImmediately) {
       setTimeout(() => {
         if (presentAttemptRef.current !== attemptId) return;
-        sendPresentationPayload(payload, { allowNative: false });
+        sendPresentationPayload(payload);
       }, 220);
     }
   };
@@ -1837,7 +1869,7 @@ function App() {
       deviceCode: deviceCodeRef.current
     };
 
-    sendPresentationPayload(payload, { allowNative: false });
+    sendPresentationPayload(payload);
   }, [displayImageSize, activeImageId, uploadedImages, roomCode, sendPresentationPayload]);
 
   useEffect(() => {
@@ -2238,6 +2270,14 @@ function App() {
               value={serverPort}
               onChange={e => setServerPort(e.target.value.replace(/[^0-9]/g, ''))}
             />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={useLanApi}
+                onChange={e => setUseLanApi(e.target.checked)}
+              />
+              Use LAN host for online API calls
+            </label>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
               API: {apiBase}
             </div>
@@ -2374,7 +2414,10 @@ function App() {
     <div className="app-container">
       {/* Header */}
       <div className="app-header">
-        <h1>WorshipCast</h1>
+        <div className="brand-header">
+          <img src="/logo.png" alt="WorshipCast logo" className="brand-logo" />
+          <h1>WorshipCast</h1>
+        </div>
         <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
           User: {userName || 'Anonymous'} | Device: {deviceCode}
         </div>
