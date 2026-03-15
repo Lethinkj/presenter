@@ -301,8 +301,8 @@ wss.on('connection', (ws) => {
             else if (message.type === 'ping') {
                 ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
             }
-            // Broadcast 'present' messages to all connected clients in the SAME room
-            else if (message.type === 'present' || message.type === 'clear') {
+            // Broadcast presentation messages to all connected clients in the SAME room
+            else if (message.type === 'present' || message.type === 'present-image' || message.type === 'clear') {
                 const senderData = clients.get(ws);
                 const targetRoom = senderData ? senderData.room : null;
 

@@ -42,8 +42,24 @@
             white-space: pre-wrap;
             max-width: 100%;
             max-height: 100%;
-            /* Simple fade in animation */
-            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        .presented-image {
+            max-width: 98%;
+            max-height: 98%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            border-radius: 10px;
+        }
+
+        .quick-fade {
+            animation: quickFade 0.14s ease-out;
+        }
+
+        @keyframes quickFade {
+            from { opacity: 0.62; }
+            to { opacity: 1; }
         }
 
         @keyframes fadeIn {
@@ -119,6 +135,12 @@
                     }
 
                     displayLyrics(data.text, data.fontSize);
+                } else if (data.type === 'present-image') {
+                    const roomDisplay = document.getElementById('room-code-display');
+                    if (roomDisplay) roomDisplay.style.display = 'none';
+                    statusElement.style.display = 'none';
+
+                    displayImage(data.imageData, data.imageSize);
                 } else if (data.type === 'clear') {
                     lyricsContainer.innerHTML = '';
                     statusElement.style.display = 'none';
@@ -142,19 +164,63 @@
 
         let currentElement = null;
         let currentFontSizeType = 'auto';
+        let currentImageElement = null;
+        let currentImageSizeType = 'auto';
+
+        function runQuickTransition(element) {
+            if (!element) return;
+            element.classList.remove('quick-fade');
+            void element.offsetWidth;
+            element.classList.add('quick-fade');
+        }
 
         function displayLyrics(text, fontSize) {
-            lyricsContainer.innerHTML = '';
-            currentElement = null;
             currentFontSizeType = fontSize || 'auto';
 
-            const div = document.createElement('div');
-            div.className = 'lyric-line';
-            div.innerText = text || '';
-            lyricsContainer.appendChild(div);
-            currentElement = div;
+            // Remove image view only when switching modes; avoid full clear flicker for text-to-text transitions.
+            if (currentImageElement) {
+                lyricsContainer.innerHTML = '';
+                currentImageElement = null;
+                currentElement = null;
+            }
+
+            if (!currentElement) {
+                const div = document.createElement('div');
+                div.className = 'lyric-line';
+                lyricsContainer.innerHTML = '';
+                lyricsContainer.appendChild(div);
+                currentElement = div;
+            }
+
+            currentElement.innerText = text || '';
+            runQuickTransition(currentElement);
 
             applyFontSize();
+        }
+
+        function displayImage(imageData, imageSize) {
+            currentImageSizeType = imageSize || 'auto';
+
+            // Remove lyric view only when switching modes; avoid full clear flicker for image-to-image transitions.
+            if (currentElement) {
+                lyricsContainer.innerHTML = '';
+                currentElement = null;
+                currentImageElement = null;
+            }
+
+            if (!currentImageElement) {
+                const img = document.createElement('img');
+                img.className = 'presented-image';
+                img.alt = 'Presented image';
+                lyricsContainer.innerHTML = '';
+                lyricsContainer.appendChild(img);
+                currentImageElement = img;
+            }
+
+            currentImageElement.src = imageData || '';
+            runQuickTransition(currentImageElement);
+
+            applyImageSize();
         }
 
         function applyFontSize() {
@@ -170,6 +236,30 @@
                     currentFontSizeType = 'auto';
                     autoFit(currentElement);
                 }
+            }
+        }
+
+        function applyImageSize() {
+            if (!currentImageElement) return;
+
+            if (currentImageSizeType === 'auto') {
+                currentImageElement.style.width = 'auto';
+                currentImageElement.style.height = 'auto';
+                currentImageElement.style.maxWidth = '98%';
+                currentImageElement.style.maxHeight = '98%';
+                return;
+            }
+
+            const parsed = parseFloat(String(currentImageSizeType));
+            if (!Number.isNaN(parsed) && parsed > 0) {
+                const clamped = Math.max(10, Math.min(100, parsed));
+                currentImageElement.style.width = `${clamped}%`;
+                currentImageElement.style.height = 'auto';
+                currentImageElement.style.maxWidth = '98%';
+                currentImageElement.style.maxHeight = '98%';
+            } else {
+                currentImageSizeType = 'auto';
+                applyImageSize();
             }
         }
 
@@ -220,6 +310,9 @@
         window.addEventListener('resize', () => {
             if (currentFontSizeType === 'auto') {
                 applyFontSize();
+            }
+            if (currentImageSizeType === 'auto') {
+                applyImageSize();
             }
         });
         window.addEventListener('orientationchange', recalcAutoFontSoon);

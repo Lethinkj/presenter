@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
-import { FaSearch, FaArrowLeft, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload } from 'react-icons/fa';
+import { FaSearch, FaArrowLeft, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload, FaImage } from 'react-icons/fa';
 import { App as CapacitorApp } from '@capacitor/app';
 
 // Supabase
@@ -229,6 +229,13 @@ const OFFLINE_DATA_FILE_PATH = 'worshipcast/offline-data.json';
 const NATIVE_FILE_STORAGE_ENABLED_IN_BUILD = false;
 const LOCAL_DATA_SNAPSHOT_KEY = 'worship_local_data_snapshot';
 
+const readImageAsDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(new Error('Failed to read image file'));
+  reader.readAsDataURL(file);
+});
+
 function App() {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeTab') || 'db');
   const [tabSearch, setTabSearch] = useState(() => loadTabSearchState());
@@ -289,7 +296,17 @@ function App() {
     const saved = localStorage.getItem('displayFontSize');
     return saved ? (saved === 'auto' ? 'auto' : Number(saved)) : 'auto';
   });
+  const [displayImageSize, setDisplayImageSize] = useState(() => {
+    const saved = localStorage.getItem('displayImageSize');
+    return saved ? (saved === 'auto' ? 'auto' : Number(saved)) : 'auto';
+  });
   const [showFontPicker, setShowFontPicker] = useState(false);
+  const [showImagePanel, setShowImagePanel] = useState(false);
+  const [uploadedImages, setUploadedImages] = useState([]);
+  const [activeImageId, setActiveImageId] = useState(null);
+  const imageInputRef = useRef(null);
+  const lastFontSyncRef = useRef({ initialized: false, font: '', size: '' });
+  const lastImageSizeSyncRef = useRef({ initialized: false, size: '' });
 
   // Add Song Modal
   const [showAddModal, setShowAddModal] = useState(false);
@@ -530,6 +547,7 @@ function App() {
   useEffect(() => { localStorage.setItem('worship_pending_sync_queue', JSON.stringify(pendingSyncQueue)); }, [pendingSyncQueue]);
   useEffect(() => { localStorage.setItem('displayFont', displayFont); }, [displayFont]);
   useEffect(() => { localStorage.setItem('displayFontSize', displayFontSize); }, [displayFontSize]);
+  useEffect(() => { localStorage.setItem('displayImageSize', displayImageSize); }, [displayImageSize]);
   useEffect(() => { localStorage.setItem('presenterServerHost', cleanedServerHost); }, [cleanedServerHost]);
   useEffect(() => { localStorage.setItem('presenterServerPort', cleanedServerPort); }, [cleanedServerPort]);
   useEffect(() => { localStorage.setItem('nativeFileStorageEnabled', nativeFileStorageEnabled ? 'true' : 'false'); }, [nativeFileStorageEnabled]);
@@ -1374,8 +1392,10 @@ function App() {
   };
 
   // ---- Present / Clear ----
-  const sendPresentationPayload = useCallback((payload) => {
-    if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
+  const sendPresentationPayload = useCallback((payload, options = {}) => {
+    const { allowNative = true } = options;
+
+    if (allowNative && Capacitor.isNativePlatform() && nativeOfflineServer.running) {
       OfflinePresenter.present({
         room: payload.room,
         text: payload.text,
@@ -1386,15 +1406,17 @@ function App() {
       }).catch(() => {
         // fallback will happen on next tap through ws path if needed
       });
-      return;
+      return true;
     }
 
     const socket = wsRef.current || ws;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(payload));
+      return true;
     } else {
       pendingPresentRef.current = payload;
       ensureConnectedRef.current();
+      return false;
     }
   }, [nativeOfflineServer.running, ws]);
 
@@ -1410,15 +1432,18 @@ function App() {
     };
 
     setActiveStanza(stanzaIndex);
+    setActiveImageId(null);
 
     // One-tap reliability: send immediately, then retry once shortly after.
     // If user taps another stanza, stale retry is ignored.
     const attemptId = ++presentAttemptRef.current;
-    sendPresentationPayload(payload);
-    setTimeout(() => {
-      if (presentAttemptRef.current !== attemptId) return;
-      sendPresentationPayload(payload);
-    }, 220);
+    const sentImmediately = sendPresentationPayload(payload);
+    if (!sentImmediately) {
+      setTimeout(() => {
+        if (presentAttemptRef.current !== attemptId) return;
+        sendPresentationPayload(payload);
+      }, 220);
+    }
 
     // Auto-save web songs to DB
     if (!options.skipAutoSave && selectedSong && !selectedSong.isCached) {
@@ -1431,8 +1456,75 @@ function App() {
     }
   };
 
+  const presentImage = (imageItem) => {
+    if (!imageItem?.dataUrl) return;
+
+    const payload = {
+      type: 'present-image',
+      imageData: imageItem.dataUrl,
+      imageName: imageItem.name,
+      imageSize: displayImageSize,
+      room: roomCode,
+      name: userNameRef.current || 'Anonymous',
+      deviceCode: deviceCodeRef.current
+    };
+
+    setActiveImageId(imageItem.id);
+    setActiveStanza(null);
+
+    const attemptId = ++presentAttemptRef.current;
+    const sentImmediately = sendPresentationPayload(payload, { allowNative: false });
+    if (!sentImmediately) {
+      setTimeout(() => {
+        if (presentAttemptRef.current !== attemptId) return;
+        sendPresentationPayload(payload, { allowNative: false });
+      }, 220);
+    }
+  };
+
+  const handleImageUpload = async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const imageFiles = files.filter(file => String(file.type || '').startsWith('image/'));
+    if (imageFiles.length === 0) {
+      alert('Please select valid image files.');
+      event.target.value = '';
+      return;
+    }
+
+    if (files.length > 20 || imageFiles.length > 20) {
+      alert('You can upload up to 20 images at a time. Only the first 20 images will be added.');
+    }
+
+    const selected = imageFiles.slice(0, 20);
+    try {
+      const mapped = await Promise.all(selected.map(async (file, index) => {
+        const dataUrl = await readImageAsDataUrl(file);
+        return {
+          id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          name: file.name,
+          dataUrl
+        };
+      }));
+
+      setUploadedImages(prev => [...mapped, ...prev].slice(0, 20));
+      setShowImagePanel(true);
+    } catch {
+      alert('Failed to read one or more images. Please try again.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
   useEffect(() => {
     if (activeStanza === null || !selectedSong) return;
+
+    const previous = lastFontSyncRef.current;
+    const changed = !previous.initialized || previous.font !== displayFont || previous.size !== String(displayFontSize);
+    lastFontSyncRef.current = { initialized: true, font: displayFont, size: String(displayFontSize) };
+    if (!changed) return;
+
     const stanzas = isEditingSong ? editableStanzas : (selectedSong.stanzas || []);
     const activeText = stanzas[activeStanza];
     if (typeof activeText !== 'string') return;
@@ -1450,8 +1542,33 @@ function App() {
     sendPresentationPayload(payload);
   }, [displayFont, displayFontSize, activeStanza, selectedSong, isEditingSong, editableStanzas, roomCode, sendPresentationPayload]);
 
+  useEffect(() => {
+    if (!activeImageId) return;
+
+    const previous = lastImageSizeSyncRef.current;
+    const changed = !previous.initialized || previous.size !== String(displayImageSize);
+    lastImageSizeSyncRef.current = { initialized: true, size: String(displayImageSize) };
+    if (!changed) return;
+
+    const imageItem = uploadedImages.find(item => item.id === activeImageId);
+    if (!imageItem?.dataUrl) return;
+
+    const payload = {
+      type: 'present-image',
+      imageData: imageItem.dataUrl,
+      imageName: imageItem.name,
+      imageSize: displayImageSize,
+      room: roomCode,
+      name: userNameRef.current || 'Anonymous',
+      deviceCode: deviceCodeRef.current
+    };
+
+    sendPresentationPayload(payload, { allowNative: false });
+  }, [displayImageSize, activeImageId, uploadedImages, roomCode, sendPresentationPayload]);
+
   const clearScreen = () => {
     setActiveStanza(null);
+    setActiveImageId(null);
 
     if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
       OfflinePresenter.clear({
@@ -1633,6 +1750,9 @@ function App() {
           <button className="icon-btn" title="Change Font" onClick={() => setShowFontPicker(f => !f)}>
             <FaFont />
           </button>
+          <button className={`icon-btn ${showImagePanel ? 'active' : ''}`} title="Share Images" onClick={() => setShowImagePanel(v => !v)}>
+            <FaImage />
+          </button>
         </div>
 
         {isEditingSong && (
@@ -1676,6 +1796,50 @@ function App() {
               <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.min(20, prev + 1))}>+</button>
               <span className="size-val">{displayFontSize === 'auto' ? 'Fitting' : `${displayFontSize}vw`}</span>
               <button className="done-btn" onClick={() => setShowFontPicker(false)}>Done</button>
+            </div>
+          </div>
+        )}
+
+        {showImagePanel && !isEditingSong && (
+          <div className="image-share-panel">
+            <div className="image-share-topbar">
+              <button className="btn-save" onClick={() => imageInputRef.current?.click()}>
+                <FaImage style={{ marginRight: 6 }} /> Upload Images
+              </button>
+              <span className="image-limit-text">Up to 20 at a time</span>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={handleImageUpload}
+              />
+            </div>
+            <div className="size-picker image-size-picker">
+              <label>Image Size:</label>
+              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.max(20, prev - 5))}>-</button>
+              <button className={`size-btn auto-btn ${displayImageSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayImageSize('auto')}>Auto</button>
+              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.min(100, prev + 5))}>+</button>
+              <span className="size-val">{displayImageSize === 'auto' ? 'Fitting' : `${displayImageSize}%`}</span>
+            </div>
+
+            <div className="image-grid">
+              {uploadedImages.length === 0 ? (
+                <div className="image-empty">Upload images, then tap one to present it on TV.</div>
+              ) : (
+                uploadedImages.map(imageItem => (
+                  <button
+                    key={imageItem.id}
+                    className={`image-tile ${activeImageId === imageItem.id ? 'active' : ''}`}
+                    onClick={() => presentImage(imageItem)}
+                  >
+                    <img src={imageItem.dataUrl} alt={imageItem.name} className="image-thumb" />
+                    <span className="image-name">{imageItem.name}</span>
+                    {activeImageId === imageItem.id && <span className="image-presented-badge">Presented</span>}
+                  </button>
+                ))
+              )}
             </div>
           </div>
         )}
