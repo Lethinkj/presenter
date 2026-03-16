@@ -35,16 +35,16 @@ body {
 
 /* Header */
 .app-header {
-  padding: 20px;
+  padding: 14px 18px 12px;
   background-color: var(--surface-color);
-  text-align: center;
+  text-align: left;
   border-bottom: 1px solid var(--border-color);
 }
 
 .brand-header {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 10px;
 }
 
@@ -55,17 +55,9 @@ body {
   border-radius: 6px;
 }
 
-.header-actions {
-  margin-top: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
 .app-header h1 {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 700;
   background: linear-gradient(90deg, #bb86fc, #6200ea);
   -webkit-background-clip: text;
@@ -77,6 +69,76 @@ body {
   display: flex;
   background-color: var(--surface-color);
   border-bottom: 1px solid var(--border-color);
+}
+
+.home-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.home-present-panel {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.home-present-link {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.home-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.2s ease;
+}
+
+.home-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary-color);
+}
+
+.home-card-icon {
+  font-size: 1.25rem;
+}
+
+.home-card-label {
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.section-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.section-title {
+  font-size: 1.02rem;
+  font-weight: 700;
+}
+
+@media (max-width: 420px) {
+  .home-cards-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .tab-btn {

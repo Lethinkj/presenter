@@ -3,6 +3,7 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import { FaSearch, FaArrowLeft, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload, FaImage, FaBook, FaHistory } from 'react-icons/fa';
 import { App as CapacitorApp } from '@capacitor/app';
+import { Filesystem, Directory } from '@capacitor/filesystem';
 
 // Supabase
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvwjzkoia.supabase.co';
@@ -243,8 +244,10 @@ const discoverLocalIps = async () => {
 };
 
 const createLocalSongId = () => `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const OFFLINE_DATA_FILE_PATH = 'worshipcast/offline-data.json';
-const NATIVE_FILE_STORAGE_ENABLED_IN_BUILD = false;
+const OFFLINE_STORAGE_FOLDER = 'worship-cast';
+const OFFLINE_DATA_FILE_PATH = `${OFFLINE_STORAGE_FOLDER}/offline-data.json`;
+const OFFLINE_STORAGE_DIR_FALLBACK = Directory.Data;
+const NATIVE_FILE_STORAGE_ENABLED_IN_BUILD = true;
 const LOCAL_DATA_SNAPSHOT_KEY = 'worship_local_data_snapshot';
 const DEFAULT_PRESENT_ROUTING_MODE = 'mirror';
 const normalizePresentRoutingMode = (value) => {
@@ -259,6 +262,57 @@ const readImageAsDataUrl = (file) => new Promise((resolve, reject) => {
   reader.onerror = () => reject(new Error('Failed to read image file'));
   reader.readAsDataURL(file);
 });
+
+const setLocalStorageSafely = (key, value) => {
+  try {
+    localStorage.setItem(key, value);
+    return null;
+  } catch (err) {
+    return err;
+  }
+};
+
+const readJsonLocalStorageSafely = (key, fallbackValue, options = {}) => {
+  const { maxChars = 250000 } = options;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallbackValue;
+
+    // Large legacy payloads can cause startup memory pressure on low-end devices.
+    // Skip parsing and clean up so app can boot and use device-file storage instead.
+    if (raw.length > maxChars) {
+      try { localStorage.removeItem(key); } catch { /* no-op */ }
+      return fallbackValue;
+    }
+
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
+};
+
+const estimateUtf8Bytes = (value) => {
+  try {
+    return new Blob([String(value || '')]).size;
+  } catch {
+    return String(value || '').length * 2;
+  }
+};
+
+const formatBytes = (bytes) => {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = n;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const digits = unit === 0 ? 0 : 1;
+  return `${size.toFixed(digits)} ${units[unit]}`;
+};
 
 const optimizeImageForPresent = async (file) => {
   const originalDataUrl = await readImageAsDataUrl(file);
@@ -321,11 +375,14 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHomeCards, setShowHomeCards] = useState(true);
 
   // Presentation
   const [selectedSong, setSelectedSong] = useState(null);
   const [ws, setWs] = useState(null);
   const wsRef = useRef(null);
+  const websocketManuallyStoppedRef = useRef(false);
+  const [presenterConnectionStopped, setPresenterConnectionStopped] = useState(false);
   const roomCodeRef = useRef('');
   const reconnectTimerRef = useRef(null);
   const heartbeatIntervalRef = useRef(null);
@@ -342,6 +399,9 @@ function App() {
   const [savingEdits, setSavingEdits] = useState(false);
   const [savingWebSongs, setSavingWebSongs] = useState({});
 
+  const [homePresentExpanded, setHomePresentExpanded] = useState(false);
+  const [homeOfflineLink, setHomeOfflineLink] = useState('');
+
   // Identity / Device
   const [deviceCode, setDeviceCode] = useState(() => {
     const saved = localStorage.getItem('deviceCode');
@@ -350,6 +410,7 @@ function App() {
     localStorage.setItem('deviceCode', generated);
     return generated;
   });
+
   const [userName, setUserName] = useState(() => localStorage.getItem('presenterUserName') || '');
   const [showProfileSetup, setShowProfileSetup] = useState(() => !localStorage.getItem('presenterUserName'));
   const [profileNameInput, setProfileNameInput] = useState(() => localStorage.getItem('presenterUserName') || '');
@@ -362,6 +423,7 @@ function App() {
     if (saved) return saved;
     return deviceCode.slice(-6).padStart(6, '0').toUpperCase();
   });
+
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedOfflineLink, setCopiedOfflineLink] = useState(false);
 
@@ -383,6 +445,7 @@ function App() {
   const [activeImageId, setActiveImageId] = useState(null);
   const [imageRemoveMode, setImageRemoveMode] = useState(false);
   const imageInputRef = useRef(null);
+
   const [bibleBooks, setBibleBooks] = useState([]);
   const [selectedBibleBook, setSelectedBibleBook] = useState(null);
   const [selectedBibleChapterIndex, setSelectedBibleChapterIndex] = useState(0);
@@ -408,33 +471,33 @@ function App() {
 
   // Favorites & Offline Cache
   const [favorites, setFavorites] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('worship_favorites')) || []; }
-    catch { return []; }
+    const parsed = readJsonLocalStorageSafely('worship_favorites', [], { maxChars: 40000 });
+    return Array.isArray(parsed) ? parsed : [];
   });
   const [recentSongs, setRecentSongs] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('worship_recent_songs')) || []; }
-    catch { return []; }
+    const parsed = readJsonLocalStorageSafely('worship_recent_songs', [], { maxChars: 40000 });
+    return Array.isArray(parsed) ? parsed : [];
   });
   const [offlineCache, setOfflineCache] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('worship_offline_cache')) || {}; }
-    catch { return {}; }
+    const parsed = readJsonLocalStorageSafely('worship_offline_cache', {}, { maxChars: 120000 });
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   });
   const [pendingSyncQueue, setPendingSyncQueue] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('worship_pending_sync_queue')) || []; }
-    catch { return []; }
+    const parsed = readJsonLocalStorageSafely('worship_pending_sync_queue', [], { maxChars: 60000 });
+    return Array.isArray(parsed) ? parsed : [];
   });
   const [syncState, setSyncState] = useState({ syncing: false, lastRun: null, lastError: '' });
   const [offlineDownloadState, setOfflineDownloadState] = useState({ downloading: false, downloaded: 0, total: null, lastError: '' });
-  const [storageState, setStorageState] = useState({ permission: 'unknown', loaded: false, lastSavedAt: null, lastError: '' });
+  const [storageState, setStorageState] = useState({ permission: 'unknown', loaded: false, lastSavedAt: null, lastError: '', directory: 'Data' });
   const [localSnapshotSavedAt, setLocalSnapshotSavedAt] = useState(() => {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(LOCAL_DATA_SNAPSHOT_KEY) || '{}');
-      return parsed.savedAt || null;
-    } catch {
-      return null;
-    }
+    const parsed = readJsonLocalStorageSafely(LOCAL_DATA_SNAPSHOT_KEY, {}, { maxChars: 120000 });
+    return parsed?.savedAt || null;
   });
-  const [nativeFileStorageEnabled, setNativeFileStorageEnabled] = useState(() => localStorage.getItem('nativeFileStorageEnabled') === 'true');
+  const [nativeFileStorageEnabled, setNativeFileStorageEnabled] = useState(() => {
+    // Crash-safe default on native: require explicit user enable from Settings.
+    if (Capacitor.isNativePlatform()) return false;
+    return localStorage.getItem('nativeFileStorageEnabled') === 'true';
+  });
   const [offlineServerStatus, setOfflineServerStatus] = useState({ checking: false, ok: null, message: '' });
   const [autoDetectingLan, setAutoDetectingLan] = useState(false);
   const [startingOfflinePresent, setStartingOfflinePresent] = useState(false);
@@ -473,9 +536,14 @@ function App() {
     () => formatOfflineLink(detectedLanHost, cleanedServerPort, roomCode, false),
     [detectedLanHost, cleanedServerPort, roomCode]
   );
+  const onlineTvUrl = useMemo(
+    () => `${apiBase}/tv.html?room=${encodeURIComponent(roomCode)}`,
+    [apiBase, roomCode]
+  );
 
   const pendingQueueRef = useRef(pendingSyncQueue);
   const offlineCacheRef = useRef(offlineCache);
+  const storageDirectoryRef = useRef(OFFLINE_STORAGE_DIR_FALLBACK);
   const syncInProgressRef = useRef(false);
   const nativeStorageLoadedRef = useRef(false);
   const autoDetectAttemptedRef = useRef(false);
@@ -483,6 +551,46 @@ function App() {
 
   useEffect(() => { pendingQueueRef.current = pendingSyncQueue; }, [pendingSyncQueue]);
   useEffect(() => { offlineCacheRef.current = offlineCache; }, [offlineCache]);
+
+  const writeLocalStorage = useCallback((key, value, label = 'local storage') => {
+    const error = setLocalStorageSafely(key, value);
+    if (!error) return true;
+
+    const message = error?.message || 'Storage write failed';
+    const lower = String(message).toLowerCase();
+    const isQuotaError = lower.includes('quota') || lower.includes('exceeded');
+
+    if (isQuotaError) {
+      // Recover from legacy large blobs occupying storage quota.
+      const keysToTrim = [
+        'worship_offline_cache',
+        'worship_pending_sync_queue',
+        LOCAL_DATA_SNAPSHOT_KEY
+      ];
+
+      for (const trimKey of keysToTrim) {
+        if (trimKey === key) continue;
+        try {
+          localStorage.removeItem(trimKey);
+        } catch {
+          // ignore cleanup failures
+        }
+      }
+
+      // Retry once after cleanup.
+      const retryError = setLocalStorageSafely(key, value);
+      if (!retryError) {
+        setStorageState(prev => ({ ...prev, lastError: '' }));
+        return true;
+      }
+    }
+
+    setStorageState(prev => ({
+      ...prev,
+      lastError: `${label}: ${message}`
+    }));
+    return false;
+  }, []);
 
   const ensureStoragePermission = useCallback(async (askUser = true) => {
     if (!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD) {
@@ -494,31 +602,33 @@ function App() {
     }
 
     if (!Capacitor.isNativePlatform()) {
-      setStorageState(prev => ({ ...prev, permission: 'not-required' }));
+      setStorageState(prev => ({ ...prev, permission: 'not-required', directory: 'BrowserLocalStorage' }));
       return true;
     }
 
-    // App-private files (Directory.Data) normally do not need runtime permission.
-    // Keep permission prompt optional for users who want explicit storage grant.
     try {
-      if (!askUser) {
-        setStorageState(prev => ({ ...prev, permission: 'app-data-only' }));
-        return true;
+      if (askUser) {
+        const allow = window.confirm('Create "worship-cast" app storage folder for offline files?');
+        if (!allow) {
+          setStorageState(prev => ({ ...prev, permission: 'app-data-only', directory: 'Data' }));
+          return true;
+        }
       }
 
-      const allow = window.confirm('Allow storage permission for offline files? This lets the app save song data for offline access.');
-      if (!allow) {
-        setStorageState(prev => ({ ...prev, permission: 'app-data-only' }));
-        return true;
-      }
+      // App-private storage does not require runtime permission and is safest across devices.
+      await Filesystem.mkdir({
+        path: OFFLINE_STORAGE_FOLDER,
+        directory: OFFLINE_STORAGE_DIR_FALLBACK,
+        recursive: true
+      });
 
-      setStorageState(prev => ({ ...prev, permission: 'app-data-only' }));
-      setNativeFileStorageEnabled(false);
-      return false;
-    } catch (err) {
-      // Directory.Data generally works without external storage permission on Android.
-      setStorageState(prev => ({ ...prev, permission: 'app-data-only', lastError: err.message || '' }));
+      storageDirectoryRef.current = OFFLINE_STORAGE_DIR_FALLBACK;
+      setStorageState(prev => ({ ...prev, permission: 'app-data-only', directory: 'Data', lastError: '' }));
       return true;
+    } catch (err) {
+      storageDirectoryRef.current = OFFLINE_STORAGE_DIR_FALLBACK;
+      setStorageState(prev => ({ ...prev, permission: 'app-data-only', directory: 'Data', lastError: err.message || '' }));
+      return false;
     }
   }, []);
 
@@ -535,8 +645,12 @@ function App() {
         pendingSyncQueue: pendingQueueRef.current
       };
 
-      // Native file storage runtime is intentionally disabled in this build.
-      void payload;
+      await Filesystem.writeFile({
+        path: OFFLINE_DATA_FILE_PATH,
+        data: JSON.stringify(payload),
+        directory: storageDirectoryRef.current,
+        recursive: true
+      });
 
       setStorageState(prev => ({ ...prev, lastSavedAt: Date.now(), lastError: '' }));
     } catch (err) {
@@ -564,7 +678,25 @@ function App() {
     }
 
     try {
-      const file = null;
+      const tried = [storageDirectoryRef.current, OFFLINE_STORAGE_DIR_FALLBACK];
+      let file = null;
+
+      for (const directory of tried) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          file = await Filesystem.readFile({
+            path: OFFLINE_DATA_FILE_PATH,
+            directory
+          });
+          storageDirectoryRef.current = directory;
+          setStorageState(prev => ({ ...prev, directory: 'Data' }));
+          break;
+        } catch {
+          // try next location
+        }
+      }
+
+      if (!file) throw new Error('offline file not found');
 
       const parsed = JSON.parse(file?.data || '{}');
       if (parsed.offlineCache && typeof parsed.offlineCache === 'object') {
@@ -628,52 +760,124 @@ function App() {
     return localId;
   }, [enqueueSongForSync]);
 
+  const shouldStoreLargeDataInLocalStorage = !Capacitor.isNativePlatform() || !nativeFileStorageEnabled;
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !nativeFileStorageEnabled) return;
+
+    // Quota-safety migration: remove heavy payloads from localStorage once device-file mode is active.
+    const heavyKeys = [
+      'worship_offline_cache',
+      'worship_pending_sync_queue',
+      LOCAL_DATA_SNAPSHOT_KEY
+    ];
+
+    for (const key of heavyKeys) {
+      const value = localStorage.getItem(key);
+      if (!value) continue;
+
+      // Keep tiny marker payloads, remove old large JSON blobs.
+      if (value.length > 2048) {
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          // Ignore cleanup failures.
+        }
+      }
+    }
+  }, [nativeFileStorageEnabled]);
+  const storageUsageSummary = useMemo(() => {
+    const offlineSongCount = Object.keys(offlineCache || {}).length;
+    const pendingCount = Array.isArray(pendingSyncQueue) ? pendingSyncQueue.length : 0;
+    const offlineBytes = estimateUtf8Bytes(JSON.stringify(offlineCache || {}));
+    const queueBytes = estimateUtf8Bytes(JSON.stringify(pendingSyncQueue || []));
+    const totalBytes = offlineBytes + queueBytes;
+
+    return {
+      offlineSongCount,
+      pendingCount,
+      offlineBytes,
+      queueBytes,
+      totalBytes,
+      target: shouldStoreLargeDataInLocalStorage ? 'LocalStorage' : 'Device Files (Directory.Data)'
+    };
+  }, [offlineCache, pendingSyncQueue, shouldStoreLargeDataInLocalStorage]);
+
   // Persist settings
-  useEffect(() => { localStorage.setItem('activeTab', activeTab); }, [activeTab]);
-  useEffect(() => { localStorage.setItem('tvRoomCode', roomCode); }, [roomCode]);
-  useEffect(() => { localStorage.setItem('tabSearchState', JSON.stringify(tabSearch)); }, [tabSearch]);
-  useEffect(() => { localStorage.setItem('deviceCode', deviceCode); }, [deviceCode]);
+  useEffect(() => { writeLocalStorage('activeTab', activeTab, 'active tab'); }, [activeTab, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('tvRoomCode', roomCode, 'room code'); }, [roomCode, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('tabSearchState', JSON.stringify(tabSearch), 'search state'); }, [tabSearch, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('deviceCode', deviceCode, 'device code'); }, [deviceCode, writeLocalStorage]);
   useEffect(() => {
     if (userName.trim()) {
-      localStorage.setItem('presenterUserName', userName.trim());
+      writeLocalStorage('presenterUserName', userName.trim(), 'user profile');
     }
-  }, [userName]);
-  useEffect(() => { localStorage.setItem('worship_favorites', JSON.stringify(favorites)); }, [favorites]);
-  useEffect(() => { localStorage.setItem('worship_recent_songs', JSON.stringify(recentSongs)); }, [recentSongs]);
-  useEffect(() => { localStorage.setItem('worship_offline_cache', JSON.stringify(offlineCache)); }, [offlineCache]);
-  useEffect(() => { localStorage.setItem('worship_pending_sync_queue', JSON.stringify(pendingSyncQueue)); }, [pendingSyncQueue]);
-  useEffect(() => { localStorage.setItem('displayFont', displayFont); }, [displayFont]);
-  useEffect(() => { localStorage.setItem('displayFontSize', displayFontSize); }, [displayFontSize]);
-  useEffect(() => { localStorage.setItem('displayImageSize', displayImageSize); }, [displayImageSize]);
-  useEffect(() => { localStorage.setItem('presenterServerHost', cleanedServerHost); }, [cleanedServerHost]);
-  useEffect(() => { localStorage.setItem('presenterServerPort', cleanedServerPort); }, [cleanedServerPort]);
-  useEffect(() => { localStorage.setItem('presenterUseLanApi', useLanApi ? 'true' : 'false'); }, [useLanApi]);
-  useEffect(() => { localStorage.setItem('presenterRoutingMode', presentRoutingMode); }, [presentRoutingMode]);
-  useEffect(() => { localStorage.setItem('nativeFileStorageEnabled', nativeFileStorageEnabled ? 'true' : 'false'); }, [nativeFileStorageEnabled]);
+  }, [userName, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('worship_favorites', JSON.stringify(favorites), 'favorites'); }, [favorites, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('worship_recent_songs', JSON.stringify(recentSongs), 'recent songs'); }, [recentSongs, writeLocalStorage]);
+  useEffect(() => {
+    if (shouldStoreLargeDataInLocalStorage) {
+      writeLocalStorage('worship_offline_cache', JSON.stringify(offlineCache), 'offline cache');
+      return;
+    }
+    // Keep a lightweight marker in localStorage while data lives in device files.
+    writeLocalStorage('worship_offline_cache', JSON.stringify({ _storedInDeviceFile: true, count: Object.keys(offlineCache || {}).length }), 'offline cache marker');
+  }, [offlineCache, shouldStoreLargeDataInLocalStorage, writeLocalStorage]);
+  useEffect(() => {
+    if (shouldStoreLargeDataInLocalStorage) {
+      writeLocalStorage('worship_pending_sync_queue', JSON.stringify(pendingSyncQueue), 'pending sync queue');
+      return;
+    }
+    writeLocalStorage('worship_pending_sync_queue', JSON.stringify({ _storedInDeviceFile: true, count: pendingSyncQueue.length }), 'pending queue marker');
+  }, [pendingSyncQueue, shouldStoreLargeDataInLocalStorage, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('displayFont', displayFont, 'display font'); }, [displayFont, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('displayFontSize', String(displayFontSize), 'display font size'); }, [displayFontSize, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('displayImageSize', String(displayImageSize), 'display image size'); }, [displayImageSize, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('presenterServerHost', cleanedServerHost, 'server host'); }, [cleanedServerHost, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('presenterServerPort', cleanedServerPort, 'server port'); }, [cleanedServerPort, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('presenterUseLanApi', useLanApi ? 'true' : 'false', 'LAN API mode'); }, [useLanApi, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('presenterRoutingMode', presentRoutingMode, 'routing mode'); }, [presentRoutingMode, writeLocalStorage]);
+  useEffect(() => { writeLocalStorage('nativeFileStorageEnabled', nativeFileStorageEnabled ? 'true' : 'false', 'native file storage toggle'); }, [nativeFileStorageEnabled, writeLocalStorage]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    if (nativeFileStorageEnabled) return;
+    // Keep boot path stable across updates that previously enabled native file storage.
+    writeLocalStorage('nativeFileStorageEnabled', 'false', 'native file storage boot-safe reset');
+  }, [nativeFileStorageEnabled, writeLocalStorage]);
 
   useEffect(() => {
     const snapshot = {
       savedAt: Date.now(),
-      favorites,
-      offlineCache,
-      pendingSyncQueue,
+      favoritesCount: favorites.length,
+      recentSongsCount: recentSongs.length,
+      offlineCacheCount: Object.keys(offlineCache || {}).length,
+      pendingSyncCount: pendingSyncQueue.length,
       roomCode,
       userName: userName || '',
-      recentSongs,
       serverHost: cleanedServerHost,
-      serverPort: cleanedServerPort
+      serverPort: cleanedServerPort,
+      storageMode: shouldStoreLargeDataInLocalStorage ? 'local-storage' : 'device-files'
     };
-    localStorage.setItem(LOCAL_DATA_SNAPSHOT_KEY, JSON.stringify(snapshot));
+
+    // In native device-file mode, avoid writing snapshots to localStorage entirely.
+    // This prevents quota issues when users migrate from older builds.
+    if (shouldStoreLargeDataInLocalStorage) {
+      writeLocalStorage(LOCAL_DATA_SNAPSHOT_KEY, JSON.stringify(snapshot), 'local snapshot');
+    }
+
     setLocalSnapshotSavedAt(snapshot.savedAt);
-  }, [favorites, recentSongs, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort]);
+  }, [favorites, recentSongs, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort, shouldStoreLargeDataInLocalStorage, writeLocalStorage]);
 
   useEffect(() => {
+    if (!nativeFileStorageEnabled) return;
     loadOfflineDataFromDevice();
-  }, [loadOfflineDataFromDevice]);
+  }, [nativeFileStorageEnabled, loadOfflineDataFromDevice]);
 
   useEffect(() => {
+    if (!nativeFileStorageEnabled) return;
     saveOfflineDataToDevice();
-  }, [offlineCache, pendingSyncQueue, saveOfflineDataToDevice]);
+  }, [nativeFileStorageEnabled, offlineCache, pendingSyncQueue, saveOfflineDataToDevice]);
 
   const runPendingSync = useCallback(async () => {
     if (syncInProgressRef.current) return;
@@ -1100,6 +1304,7 @@ function App() {
 
     const scheduleReconnect = () => {
       if (isDisposed) return;
+      if (websocketManuallyStoppedRef.current) return;
       clearReconnectTimer();
       const delay = reconnectDelayRef.current;
       reconnectTimerRef.current = setTimeout(connect, delay);
@@ -1108,6 +1313,7 @@ function App() {
 
     const connect = () => {
       if (isDisposed) return;
+      if (websocketManuallyStoppedRef.current) return;
 
       const existing = wsRef.current;
       if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
@@ -1118,7 +1324,19 @@ function App() {
         try { existing.close(); } catch { /* no-op */ }
       }
 
-      const socket = new WebSocket(buildRoomScopedWsUrl(WS_URL, roomCodeRef.current));
+      let socket;
+      try {
+        const scopedWsUrl = buildRoomScopedWsUrl(WS_URL, roomCodeRef.current);
+        socket = new WebSocket(scopedWsUrl);
+      } catch (err) {
+        setOfflineServerStatus(prev => ({
+          ...prev,
+          message: `WebSocket init failed: ${err?.message || 'invalid URL'}`
+        }));
+        scheduleReconnect();
+        return;
+      }
+
       wsRef.current = socket;
       setWs(socket);
 
@@ -1184,6 +1402,7 @@ function App() {
 
     const ensureConnected = () => {
       if (isDisposed) return;
+      if (websocketManuallyStoppedRef.current) return;
       clearReconnectTimer();
       connect();
     };
@@ -1225,10 +1444,21 @@ function App() {
     if (selectedSong) {
       setSelectedSong(null);
       setActiveStanza(null);
+      setShowHomeCards(true);
+      setShowSettings(false);
       return true;
     }
     if (showSettings) {
       setShowSettings(false);
+      setShowHomeCards(true);
+      setResults([]);
+      setSelectedLetter(null);
+      return true;
+    }
+    if (!showHomeCards) {
+      setShowHomeCards(true);
+      setResults([]);
+      setSelectedLetter(null);
       return true;
     }
     return false;
@@ -1242,7 +1472,7 @@ function App() {
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [selectedSong, showSettings]);
+  }, [selectedSong, showSettings, showHomeCards]);
 
   useEffect(() => {
     const onCordovaBack = (event) => {
@@ -1257,12 +1487,19 @@ function App() {
     let removeAppStateListener;
 
     CapacitorApp.addListener('backButton', ({ canGoBack }) => {
-      if (handleInternalBack()) return;
-      if (canGoBack) {
-        window.history.back();
-      } else {
-        CapacitorApp.minimizeApp();
-      }
+        if (handleInternalBack()) return;
+        // If not in modal/song/settings, always return to home instead of exiting app
+        if (!showHomeCards) {
+          setShowHomeCards(true);
+          setResults([]);
+          setSelectedLetter(null);
+          return;
+        }
+        if (canGoBack) {
+          window.history.back();
+        } else {
+          CapacitorApp.minimizeApp();
+        }
     }).then(h => { removeBackButtonListener = h; }).catch(() => {});
 
     CapacitorApp.addListener('appStateChange', ({ isActive }) => {
@@ -1281,14 +1518,14 @@ function App() {
   const openSettingsPage = () => {
     if (showSettings) return;
     setShowSettings(true);
-    window.history.pushState({ appView: 'settings' }, '');
+    setShowHomeCards(false);
   };
 
   const closeSettingsPage = () => {
     setShowSettings(false);
-    if (window.history.state?.appView === 'settings') {
-      window.history.back();
-    }
+    setShowHomeCards(true);
+    setResults([]);
+    setSelectedLetter(null);
   };
 
   // ---- Search ----
@@ -2026,6 +2263,51 @@ function App() {
     }
   };
 
+  const handleStopOfflinePresent = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      setOfflineServerStatus({ checking: false, ok: false, message: 'Stop is available on native app only.' });
+      return;
+    }
+
+    try {
+      await OfflinePresenter.stopServer();
+      setNativeOfflineServer({ running: false, host: '', port: Number(cleanedServerPort), url: '' });
+      setOfflineServerStatus({ checking: false, ok: false, message: 'Offline presenter stopped.' });
+    } catch (err) {
+      setOfflineServerStatus({ checking: false, ok: false, message: err?.message || 'Failed to stop offline presenter.' });
+    }
+  };
+
+  const handleStopPresenterConnection = () => {
+    websocketManuallyStoppedRef.current = true;
+    setPresenterConnectionStopped(true);
+    pendingPresentRef.current = null;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+    if (staleCheckIntervalRef.current) {
+      clearInterval(staleCheckIntervalRef.current);
+      staleCheckIntervalRef.current = null;
+    }
+    const socket = wsRef.current;
+    if (socket && socket.readyState !== WebSocket.CLOSED) {
+      try { socket.close(); } catch { /* no-op */ }
+    }
+    setOfflineServerStatus(prev => ({ ...prev, message: 'Presenter connection stopped. Tap Reconnect Presenter when needed.' }));
+  };
+
+  const handleReconnectPresenterConnection = () => {
+    websocketManuallyStoppedRef.current = false;
+    setPresenterConnectionStopped(false);
+    ensureConnectedRef.current();
+    setOfflineServerStatus(prev => ({ ...prev, message: 'Presenter reconnect requested.' }));
+  };
+
   const completeProfileSetup = () => {
     const normalized = profileNameInput.trim();
     if (!normalized) {
@@ -2040,6 +2322,59 @@ function App() {
     setTabSearch({ db: '', web: '', favorites: '', images: '', bible: '', recents: '' });
     setResults([]);
     setSelectedLetter(null);
+  };
+
+  const homeCards = [
+    { key: 'db', label: 'DB Search', icon: <FaDatabase /> },
+    { key: 'web', label: 'Web Search', icon: <FaGlobe /> },
+    { key: 'bible', label: 'Bible', icon: <FaBook /> },
+    { key: 'favorites', label: 'Favorites', icon: <FaStar /> },
+    { key: 'recents', label: 'Recents', icon: <FaHistory /> },
+    { key: 'images', label: 'Images', icon: <FaImage /> },
+    { key: 'settings', label: 'Settings', icon: <FaCog /> }
+  ];
+
+  const openHomeCard = (tabKey) => {
+    if (tabKey === 'settings') {
+      openSettingsPage();
+      return;
+    }
+    setActiveTab(tabKey);
+    setResults([]);
+    setSelectedLetter(null);
+    setShowHomeCards(false);
+  };
+
+  const startPresenterFromHome = async () => {
+    setHomePresentExpanded(true);
+    setStartingOfflinePresent(true);
+
+    try {
+      const hostToUse = await ensureOfflineServerReady();
+      if (!hostToUse) {
+        setHomeOfflineLink('');
+        setOfflineServerStatus(prev => ({
+          ...prev,
+          ok: false,
+          message: 'Offline presenter not available. Online link is still active.'
+        }));
+        return;
+      }
+
+      setHomeOfflineLink(formatOfflineLink(hostToUse, cleanedServerPort, roomCode, true));
+    } finally {
+      setStartingOfflinePresent(false);
+    }
+  };
+
+  const stopPresenterFromHome = async () => {
+    try {
+      await handleStopOfflinePresent();
+    } catch {
+      // no-op
+    }
+    setHomePresentExpanded(false);
+    setHomeOfflineLink('');
   };
 
   // ---- Share Link ----
@@ -2305,22 +2640,6 @@ function App() {
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 4 }}>
               Simple link: {offlineTvUrlSimple || 'Auto-detecting...'}
             </div>
-            <button
-              className={`share-btn ${copiedOfflineLink ? 'copied' : ''}`}
-              style={{ marginTop: 10 }}
-              onClick={handleOfflinePresentLink}
-              title="Copy Offline Present Link"
-            >
-              <FaWifi style={{ marginRight: 6 }} /> {copiedOfflineLink ? 'Copied' : 'Offline Present Link'}
-            </button>
-            <button
-              className="btn-save"
-              style={{ marginTop: 10 }}
-              onClick={handleStartOfflinePresent}
-              disabled={startingOfflinePresent || autoDetectingLan}
-            >
-              {startingOfflinePresent ? 'Starting...' : 'Start Present Offline'}
-            </button>
             {autoDetectingLan && (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
                 Auto-detecting local server...
@@ -2433,6 +2752,21 @@ function App() {
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
               Loaded: {storageState.loaded ? 'Yes' : 'No'}
             </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Folder: {OFFLINE_STORAGE_FOLDER} ({storageState.directory})
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Cached songs: {storageUsageSummary.offlineSongCount}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Pending sync: {storageUsageSummary.pendingCount}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Cache size est.: {formatBytes(storageUsageSummary.offlineBytes)} + {formatBytes(storageUsageSummary.queueBytes)} = {formatBytes(storageUsageSummary.totalBytes)}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+              Large data target: {storageUsageSummary.target}
+            </div>
             {localSnapshotSavedAt && (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
                 Local data saved: {new Date(localSnapshotSavedAt).toLocaleString()}
@@ -2448,20 +2782,6 @@ function App() {
                 Storage error: {storageState.lastError}
               </div>
             )}
-            <button
-              className="btn-save"
-              style={{ marginTop: 10 }}
-              onClick={() => ensureStoragePermission(true)}
-            >
-              Ask Storage Permission
-            </button>
-            <button
-              className="btn-save"
-              style={{ marginTop: 10 }}
-              onClick={() => setNativeFileStorageEnabled(v => !v)}
-            >
-              {nativeFileStorageEnabled ? 'Disable Device File Storage' : 'Enable Device File Storage'}
-            </button>
             {!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD && (
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
                 Native file storage is disabled in this build for crash safety.
@@ -2496,45 +2816,52 @@ function App() {
         <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
           User: {userName || 'Anonymous'} | Device: {deviceCode}
         </div>
-        <div className="header-actions">
-          <button className="share-btn" onClick={openSettingsPage} title="Open Settings">
-            <FaCog style={{ marginRight: 6 }} /> Settings
-          </button>
-        </div>
         {!isOnline && (
           <span className="offline-chip"><FaWifi style={{ marginRight: 4 }} />Offline</span>
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="tabs">
-        <button className={`tab-btn ${activeTab === 'db' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('db'); setResults([]); setSelectedLetter(null); }}>
-          <FaDatabase style={{ marginRight: 6 }} />DB
-        </button>
-        <button className={`tab-btn ${activeTab === 'web' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('web'); setResults([]); }}>
-          <FaGlobe style={{ marginRight: 6 }} />Web
-        </button>
-        <button className={`tab-btn ${activeTab === 'favorites' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('favorites'); }}>
-          <FaStar style={{ marginRight: 6 }} />Favs
-        </button>
-        <button className={`tab-btn ${activeTab === 'recents' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('recents'); }}>
-          <FaHistory style={{ marginRight: 6 }} />Recents
-        </button>
-        <button className={`tab-btn ${activeTab === 'images' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('images'); setResults([]); setSelectedLetter(null); }}>
-          <FaImage style={{ marginRight: 6 }} />Images
-        </button>
-        <button className={`tab-btn ${activeTab === 'bible' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('bible'); setResults([]); setSelectedLetter(null); }}>
-          <FaBook style={{ marginRight: 6 }} />Bible
-        </button>
-      </div>
-
+      {showHomeCards ? (
+        <div className="content-area">
+          <div className="home-present-panel">
+            <button
+              className="btn-save"
+              onClick={startPresenterFromHome}
+              disabled={startingOfflinePresent}
+            >
+              {startingOfflinePresent ? 'Starting...' : 'Start Presenter'}
+            </button>
+            {homePresentExpanded && (
+              <>
+                <button className="btn-save" onClick={stopPresenterFromHome}>
+                  Stop Presenter
+                </button>
+                <div className="home-present-link">Online Present: {onlineTvUrl}</div>
+                <div className="home-present-link">Offline Present: {homeOfflineLink || 'Not ready yet'}</div>
+              </>
+            )}
+          </div>
+          <div className="home-cards-grid">
+            {homeCards.map(card => (
+              <button
+                key={card.key}
+                className="home-card"
+                onClick={() => openHomeCard(card.key)}
+              >
+                <span className="home-card-icon">{card.icon}</span>
+                <span className="home-card-label">{card.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
       <div className="content-area">
+        <div className="section-topbar">
+          <button className="back-btn" onClick={() => setShowHomeCards(true)}>
+            <FaArrowLeft />
+          </button>
+          <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
+        </div>
         {activeTab === 'images' && (
           <div className="image-share-panel">
             <div className="image-share-topbar">
@@ -2827,6 +3154,7 @@ function App() {
           <div className="loading">No songs starting with "{selectedLetter}".</div>
         )}
       </div>
+      )}
 
       {/* Add Song Modal */}
       {showAddModal && (
