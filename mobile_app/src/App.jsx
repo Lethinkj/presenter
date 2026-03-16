@@ -246,6 +246,12 @@ const createLocalSongId = () => `local-${Date.now()}-${Math.random().toString(36
 const OFFLINE_DATA_FILE_PATH = 'worshipcast/offline-data.json';
 const NATIVE_FILE_STORAGE_ENABLED_IN_BUILD = false;
 const LOCAL_DATA_SNAPSHOT_KEY = 'worship_local_data_snapshot';
+const DEFAULT_PRESENT_ROUTING_MODE = 'mirror';
+const normalizePresentRoutingMode = (value) => {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'offline' || mode === 'online' || mode === 'mirror') return mode;
+  return DEFAULT_PRESENT_ROUTING_MODE;
+};
 
 const readImageAsDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -282,10 +288,22 @@ const optimizeImageForPresent = async (file) => {
     if (!context) return originalDataUrl;
 
     context.drawImage(imageElement, 0, 0, targetWidth, targetHeight);
-    const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.84);
+    let optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.84);
+    const MAX_SAFE_DATA_URL_LEN = 1_200_000;
 
-    // Keep the optimized image only when there is a meaningful size reduction.
-    if (optimizedDataUrl.length < originalDataUrl.length * 0.95) {
+    if (optimizedDataUrl.length > MAX_SAFE_DATA_URL_LEN) {
+      // Keep reducing quality for very large images to improve local/offline delivery reliability.
+      for (let quality = 0.76; quality >= 0.48; quality -= 0.08) {
+        const candidate = canvas.toDataURL('image/jpeg', quality);
+        if (candidate.length < optimizedDataUrl.length) {
+          optimizedDataUrl = candidate;
+        }
+        if (optimizedDataUrl.length <= MAX_SAFE_DATA_URL_LEN) break;
+      }
+    }
+
+    // Use optimized output on meaningful reduction, or always for oversized originals.
+    if (optimizedDataUrl.length < originalDataUrl.length * 0.95 || originalDataUrl.length > MAX_SAFE_DATA_URL_LEN) {
       return optimizedDataUrl;
     }
     return originalDataUrl;
@@ -422,6 +440,7 @@ function App() {
   const [startingOfflinePresent, setStartingOfflinePresent] = useState(false);
   const [nativeOfflineServer, setNativeOfflineServer] = useState({ running: false, host: '', port: 3000, url: '' });
   const [useLanApi, setUseLanApi] = useState(() => localStorage.getItem('presenterUseLanApi') === 'true');
+  const [presentRoutingMode, setPresentRoutingMode] = useState(() => normalizePresentRoutingMode(localStorage.getItem('presenterRoutingMode')));
 
   // Connection config for LAN/hotspot use.
   const [serverHost, setServerHost] = useState(() => localStorage.getItem('presenterServerHost') || '');
@@ -629,6 +648,7 @@ function App() {
   useEffect(() => { localStorage.setItem('presenterServerHost', cleanedServerHost); }, [cleanedServerHost]);
   useEffect(() => { localStorage.setItem('presenterServerPort', cleanedServerPort); }, [cleanedServerPort]);
   useEffect(() => { localStorage.setItem('presenterUseLanApi', useLanApi ? 'true' : 'false'); }, [useLanApi]);
+  useEffect(() => { localStorage.setItem('presenterRoutingMode', presentRoutingMode); }, [presentRoutingMode]);
   useEffect(() => { localStorage.setItem('nativeFileStorageEnabled', nativeFileStorageEnabled ? 'true' : 'false'); }, [nativeFileStorageEnabled]);
 
   useEffect(() => {
@@ -1531,9 +1551,16 @@ function App() {
 
   // ---- Present / Clear ----
   const sendPresentationPayload = useCallback((payload, options = {}) => {
-    const { allowNative = true } = options;
+    const { allowNative = true, allowWebSocket = true } = options;
 
-    if (allowNative && Capacitor.isNativePlatform() && nativeOfflineServer.running) {
+    const routeNative = allowNative && presentRoutingMode !== 'online';
+    const routeWebSocket = allowWebSocket && presentRoutingMode !== 'offline';
+
+    let sentAny = false;
+
+    // Keep local/offline and online presentation in sync: do not make them mutually exclusive.
+    if (routeNative && Capacitor.isNativePlatform() && nativeOfflineServer.running) {
+      sentAny = true;
       OfflinePresenter.present({
         room: payload.room,
         text: payload.text,
@@ -1545,21 +1572,24 @@ function App() {
         name: payload.name,
         deviceCode: payload.deviceCode
       }).catch(() => {
-        // fallback will happen on next tap through ws path if needed
+        // Keep websocket path active as fallback for reliability.
       });
-      return true;
+    }
+
+    if (!routeWebSocket) {
+      return sentAny;
     }
 
     const socket = wsRef.current || ws;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(payload));
       return true;
-    } else {
-      pendingPresentRef.current = payload;
-      ensureConnectedRef.current();
-      return false;
     }
-  }, [nativeOfflineServer.running, ws]);
+
+    pendingPresentRef.current = payload;
+    ensureConnectedRef.current();
+    return sentAny;
+  }, [nativeOfflineServer.running, presentRoutingMode, ws]);
 
   const presentLyrics = async (stanzaText, stanzaIndex, options = {}) => {
     const payload = {
@@ -1904,12 +1934,18 @@ function App() {
     setActiveBibleVerseKey('');
     setActiveBibleVerseText('');
 
-    if (Capacitor.isNativePlatform() && nativeOfflineServer.running) {
+    const routeNative = presentRoutingMode !== 'online';
+    const routeWebSocket = presentRoutingMode !== 'offline';
+
+    if (routeNative && Capacitor.isNativePlatform() && nativeOfflineServer.running) {
       OfflinePresenter.clear({
         room: roomCode,
         name: userNameRef.current || 'Anonymous',
         deviceCode: deviceCodeRef.current
       }).catch(() => {});
+    }
+
+    if (!routeWebSocket) {
       return;
     }
 
@@ -1921,6 +1957,14 @@ function App() {
         name: userNameRef.current || 'Anonymous',
         deviceCode: deviceCodeRef.current
       }));
+    } else {
+      pendingPresentRef.current = {
+        type: 'clear',
+        room: roomCode,
+        name: userNameRef.current || 'Anonymous',
+        deviceCode: deviceCodeRef.current
+      };
+      ensureConnectedRef.current();
     }
   };
 
@@ -2227,6 +2271,37 @@ function App() {
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 8 }}>
               Open TV/browser on same hotspot or Wi-Fi network.
             </p>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 8 }}>
+              Cast Route
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              <button
+                className={`btn-save ${presentRoutingMode === 'mirror' ? 'active' : ''}`}
+                onClick={() => setPresentRoutingMode('mirror')}
+                style={{ marginTop: 0 }}
+              >
+                Mirror (Online + Offline)
+              </button>
+              <button
+                className={`btn-save ${presentRoutingMode === 'offline' ? 'active' : ''}`}
+                onClick={() => setPresentRoutingMode('offline')}
+                style={{ marginTop: 0 }}
+              >
+                Offline Only
+              </button>
+              <button
+                className={`btn-save ${presentRoutingMode === 'online' ? 'active' : ''}`}
+                onClick={() => setPresentRoutingMode('online')}
+                style={{ marginTop: 0 }}
+              >
+                Online Only
+              </button>
+            </div>
+            {presentRoutingMode === 'offline' && !nativeOfflineServer.running && (
+              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+                Offline only is selected. Start offline presenter to cast locally.
+              </div>
+            )}
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 4 }}>
               Simple link: {offlineTvUrlSimple || 'Auto-detecting...'}
             </div>

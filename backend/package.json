@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "import:songs": "node import_songs.js",
+    "heartbeat:once": "node daily_heartbeat.js --once",
+    "heartbeat:daily": "node daily_heartbeat.js",
     "search:test": "node -e \"const s=require('./scraper'); (async()=>{const q=process.argv[1]||'yesu'; const r=await s.searchSongs(q); console.log(r.slice(0,10));})().catch(e=>{console.error(e); process.exit(1);});\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
