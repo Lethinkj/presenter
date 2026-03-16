@@ -121,18 +121,25 @@ const startDailyScheduler = async () => {
     }, firstDelayMs);
 };
 
-const runOnce = process.argv.includes('--once');
+module.exports = {
+    runHeartbeat,
+    startDailyScheduler
+};
 
-if (runOnce) {
-    runHeartbeat('manual')
-        .then(() => process.exit(0))
-        .catch((err) => {
-            console.error('[heartbeat] one-time log failed:', err.message || err);
+if (require.main === module) {
+    const runOnce = process.argv.includes('--once');
+
+    if (runOnce) {
+        runHeartbeat('manual')
+            .then(() => process.exit(0))
+            .catch((err) => {
+                console.error('[heartbeat] one-time log failed:', err.message || err);
+                process.exit(1);
+            });
+    } else {
+        startDailyScheduler().catch((err) => {
+            console.error('[heartbeat] scheduler failed to start:', err.message || err);
             process.exit(1);
         });
-} else {
-    startDailyScheduler().catch((err) => {
-        console.error('[heartbeat] scheduler failed to start:', err.message || err);
-        process.exit(1);
-    });
+    }
 }

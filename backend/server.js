@@ -6,6 +6,7 @@ const WebSocket = require('ws');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const scraper = require('./scraper');
+const { startDailyScheduler } = require('./daily_heartbeat');
 
 const app = express();
 const server = http.createServer(app);
@@ -348,4 +349,7 @@ wss.on('close', () => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`WorshipCast Presentation Server running on port ${PORT}`);
+    startDailyScheduler().catch((err) => {
+        console.error('[heartbeat] scheduler failed to start from server:', err.message || err);
+    });
 });
