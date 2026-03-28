@@ -453,8 +453,10 @@ function App() {
   const [bibleError, setBibleError] = useState('');
   const [activeBibleVerseKey, setActiveBibleVerseKey] = useState('');
   const [activeBibleVerseText, setActiveBibleVerseText] = useState('');
+  const [activeBibleReference, setActiveBibleReference] = useState('');
   const [showBibleControls, setShowBibleControls] = useState(false);
   const bibleSwipeStartXRef = useRef(null);
+  const bibleSwipeStartYRef = useRef(null);
   const bibleVerseListRef = useRef(null);
   const lastFontSyncRef = useRef({ initialized: false, font: '', size: '' });
   const lastImageSizeSyncRef = useRef({ initialized: false, size: '' });
@@ -1959,7 +1961,7 @@ function App() {
       setSelectedBibleChapterIndex(0);
       setActiveBibleVerseKey('');
       setActiveBibleVerseText('');
-      setShowBibleControls(false);
+      setActiveBibleReference('');
     } catch {
       setBibleError('Failed to load selected book.');
     } finally {
@@ -1972,9 +1974,11 @@ function App() {
     if (!cleanText) return;
 
     const chapterNumber = Number(selectedBibleChapterIndex) + 1;
+    const reference = `${selectedBibleBook?.tamil || selectedBibleBook?.english || ''} ${chapterNumber}:${verseNumber}`.trim();
     const payload = {
       type: 'present',
       text: cleanText,
+      reference,
       room: roomCode,
       font: displayFont,
       fontSize: displayFontSize,
@@ -1986,6 +1990,7 @@ function App() {
     setActiveImageId(null);
     setActiveBibleVerseKey(`${selectedBibleBook?.english || ''}-${chapterNumber}-${verseNumber}`);
     setActiveBibleVerseText(cleanText);
+    setActiveBibleReference(reference);
 
     const attemptId = ++presentAttemptRef.current;
     const sentImmediately = sendPresentationPayload(payload);
@@ -2005,20 +2010,32 @@ function App() {
     setSelectedBibleChapterIndex(bounded);
     setActiveBibleVerseKey('');
     setActiveBibleVerseText('');
+    setActiveBibleReference('');
   }, [selectedBibleBook]);
 
   const handleBibleSwipeStart = (event) => {
-    bibleSwipeStartXRef.current = event.changedTouches?.[0]?.clientX ?? null;
+    const touch = event.changedTouches?.[0];
+    bibleSwipeStartXRef.current = touch?.clientX ?? null;
+    bibleSwipeStartYRef.current = touch?.clientY ?? null;
   };
 
   const handleBibleSwipeEnd = (event) => {
     const startX = bibleSwipeStartXRef.current;
+    const startY = bibleSwipeStartYRef.current;
     const endX = event.changedTouches?.[0]?.clientX ?? null;
+    const endY = event.changedTouches?.[0]?.clientY ?? null;
     bibleSwipeStartXRef.current = null;
-    if (startX === null || endX === null) return;
+    bibleSwipeStartYRef.current = null;
+    if (startX === null || endX === null || startY === null || endY === null) return;
 
     const deltaX = endX - startX;
-    if (Math.abs(deltaX) < 42) return;
+    const deltaY = endY - startY;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+
+    // Avoid accidental chapter changes while reading long chapters (vertical scroll).
+    if (absY > absX || absY > 24) return;
+    if (absX < 42) return;
 
     // Requested flow update: swipe right -> previous chapter, swipe left -> next chapter.
     if (deltaX > 0) {
@@ -2155,6 +2172,7 @@ function App() {
     const payload = {
       type: 'present',
       text: activeBibleVerseText,
+      reference: activeBibleReference,
       room: roomCode,
       font: displayFont,
       fontSize: displayFontSize,
@@ -2163,13 +2181,14 @@ function App() {
     };
 
     sendPresentationPayload(payload);
-  }, [activeBibleVerseKey, activeBibleVerseText, displayFont, displayFontSize, roomCode, sendPresentationPayload]);
+  }, [activeBibleVerseKey, activeBibleVerseText, activeBibleReference, displayFont, displayFontSize, roomCode, sendPresentationPayload]);
 
   const clearScreen = () => {
     setActiveStanza(null);
     setActiveImageId(null);
     setActiveBibleVerseKey('');
     setActiveBibleVerseText('');
+    setActiveBibleReference('');
 
     const routeNative = presentRoutingMode !== 'online';
     const routeWebSocket = presentRoutingMode !== 'offline';

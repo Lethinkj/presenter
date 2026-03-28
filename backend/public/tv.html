@@ -74,6 +74,24 @@
             font-size: 1rem;
             color: rgba(255, 255, 255, 0.3);
         }
+
+        #verse-reference {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 2.2vw;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-shadow: 1px 1px 6px rgba(0, 0, 0, 0.85);
+            display: none;
+            text-align: center;
+            max-width: 92vw;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
     </style>
 </head>
 <body>
@@ -84,11 +102,14 @@
         <div id="room-code-display" style="color: #444; font-size: 3vw; margin-top: 20px;">Room Code: <span id="room-code-val">...</span></div>
     </div>
 
+    <div id="verse-reference"></div>
+
     <div id="status">Connecting...</div>
 
     <script>
         const lyricsContainer = document.getElementById('lyrics-container');
         const statusElement = document.getElementById('status');
+        const verseReferenceElement = document.getElementById('verse-reference');
 
         // Connect to the WebSocket server running on the same host and port
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -130,8 +151,18 @@
                     statusElement.style.display = 'none'; // Also hide the connected status text to be clean
 
                     if (data.imageData) {
+                        verseReferenceElement.style.display = 'none';
+                        verseReferenceElement.innerText = '';
                         displayImage(data.imageData, data.imageSize);
                         return;
+                    }
+
+                    if (data.reference) {
+                        verseReferenceElement.innerText = data.reference;
+                        verseReferenceElement.style.display = 'block';
+                    } else {
+                        verseReferenceElement.style.display = 'none';
+                        verseReferenceElement.innerText = '';
                     }
                     
                     // Apply font if sent
@@ -144,10 +175,16 @@
                     const roomDisplay = document.getElementById('room-code-display');
                     if (roomDisplay) roomDisplay.style.display = 'none';
                     statusElement.style.display = 'none';
+                    verseReferenceElement.style.display = 'none';
+                    verseReferenceElement.innerText = '';
 
                     displayImage(data.imageData, data.imageSize);
                 } else if (data.type === 'clear') {
                     lyricsContainer.innerHTML = '';
+                    currentElement = null;
+                    currentImageElement = null;
+                    verseReferenceElement.style.display = 'none';
+                    verseReferenceElement.innerText = '';
                     statusElement.style.display = 'none';
                 } else if (data.type === 'status' || data.type === 'error') {
                     console.log('Server message:', data.message);
