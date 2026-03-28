@@ -32,6 +32,12 @@
             justify-content: center;
             align-items: center;
             text-align: center;
+            box-sizing: border-box;
+            transition: padding-top 0.16s ease;
+        }
+
+        body.ref-visible #lyrics-container {
+            padding-top: 28px;
         }
 
         .lyric-line {
@@ -91,6 +97,7 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            padding-bottom: 12px;
         }
     </style>
 </head>
@@ -153,6 +160,7 @@
                     if (data.imageData) {
                         verseReferenceElement.style.display = 'none';
                         verseReferenceElement.innerText = '';
+                        document.body.classList.remove('ref-visible');
                         displayImage(data.imageData, data.imageSize);
                         return;
                     }
@@ -160,9 +168,11 @@
                     if (data.reference) {
                         verseReferenceElement.innerText = data.reference;
                         verseReferenceElement.style.display = 'block';
+                        document.body.classList.add('ref-visible');
                     } else {
                         verseReferenceElement.style.display = 'none';
                         verseReferenceElement.innerText = '';
+                        document.body.classList.remove('ref-visible');
                     }
                     
                     // Apply font if sent
@@ -177,6 +187,7 @@
                     statusElement.style.display = 'none';
                     verseReferenceElement.style.display = 'none';
                     verseReferenceElement.innerText = '';
+                    document.body.classList.remove('ref-visible');
 
                     displayImage(data.imageData, data.imageSize);
                 } else if (data.type === 'clear') {
@@ -185,6 +196,7 @@
                     currentImageElement = null;
                     verseReferenceElement.style.display = 'none';
                     verseReferenceElement.innerText = '';
+                    document.body.classList.remove('ref-visible');
                     statusElement.style.display = 'none';
                 } else if (data.type === 'status' || data.type === 'error') {
                     console.log('Server message:', data.message);
@@ -313,13 +325,14 @@
             const boxHeight = lyricsContainer.clientHeight;
             if (!boxWidth || !boxHeight) return;
 
-            const maxW = boxWidth * 0.98;
             const maxH = boxHeight * 0.98;
             const minPx = 18;
             let low = minPx;
-            const naturalHigh = Math.max(30, Math.floor(Math.min(boxWidth * 0.28, boxHeight * 0.34)));
+            const naturalHigh = Math.max(30, Math.floor(boxHeight * 0.34));
+            // For manual font size, honor presenter-selected size as the upper bound,
+            // then shrink only when needed to fit screen.
             const cappedHigh = Number.isFinite(maxPxCap) && maxPxCap > 0
-                ? Math.floor(Math.min(naturalHigh, maxPxCap))
+                ? Math.floor(maxPxCap)
                 : naturalHigh;
             let high = Math.max(minPx, cappedHigh);
             let best = minPx;
@@ -337,7 +350,7 @@
                 const mid = Math.floor((low + high) / 2);
                 applyAutoStyles(mid);
 
-                if (element.scrollHeight <= maxH && element.scrollWidth <= maxW) {
+                if (element.scrollHeight <= maxH) {
                     best = mid;
                     low = mid + 1;
                 } else {

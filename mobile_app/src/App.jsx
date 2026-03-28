@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
-import { FaSearch, FaArrowLeft, FaGlobe, FaDatabase, FaStar, FaRegStar, FaShareAlt, FaPlus, FaFont, FaWifi, FaEdit, FaSave, FaTimes, FaCog, FaTrash, FaDownload, FaImage, FaBook, FaHistory } from 'react-icons/fa';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Filesystem, Directory } from '@capacitor/filesystem';
+import SongPresentationPage from './pages/SongPresentationPage';
+import SettingsPage from './pages/SettingsPage';
+import MainPage from './pages/MainPage';
 
 // Supabase
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvwjzkoia.supabase.co';
@@ -1442,7 +1444,7 @@ function App() {
     };
   }, []);
 
-  const handleInternalBack = () => {
+  const handleInternalBack = useCallback(() => {
     if (selectedSong) {
       setSelectedSong(null);
       setActiveStanza(null);
@@ -1464,7 +1466,7 @@ function App() {
       return true;
     }
     return false;
-  };
+  }, [selectedSong, showSettings, showHomeCards]);
 
   // In-app back stack: close song/settings on browser/mobile back before exiting app.
   useEffect(() => {
@@ -1474,7 +1476,7 @@ function App() {
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [selectedSong, showSettings, showHomeCards]);
+  }, [handleInternalBack]);
 
   useEffect(() => {
     const onCordovaBack = (event) => {
@@ -1515,7 +1517,7 @@ function App() {
       if (removeBackButtonListener) removeBackButtonListener.remove();
       if (removeAppStateListener) removeAppStateListener.remove();
     };
-  }, [selectedSong, showSettings]);
+  }, [handleInternalBack, showHomeCards]);
 
   const openSettingsPage = () => {
     if (showSettings) return;
@@ -2343,16 +2345,6 @@ function App() {
     setSelectedLetter(null);
   };
 
-  const homeCards = [
-    { key: 'db', label: 'DB Search', icon: <FaDatabase /> },
-    { key: 'web', label: 'Web Search', icon: <FaGlobe /> },
-    { key: 'bible', label: 'Bible', icon: <FaBook /> },
-    { key: 'favorites', label: 'Favorites', icon: <FaStar /> },
-    { key: 'recents', label: 'Recents', icon: <FaHistory /> },
-    { key: 'images', label: 'Images', icon: <FaImage /> },
-    { key: 'settings', label: 'Settings', icon: <FaCog /> }
-  ];
-
   const openHomeCard = (tabKey) => {
     if (tabKey === 'settings') {
       openSettingsPage();
@@ -2458,364 +2450,82 @@ function App() {
     } finally { setAddSaving(false); }
   };
 
-  // ---- Presentation View ----
+  // ---- Page Rendering ----
   if (selectedSong) {
-    const displayStanzas = isEditingSong ? editableStanzas : selectedSong.stanzas;
-    const selectedSongSaveKey = selectedSong.url || selectedSong.title;
-
     return (
-      <div className="app-container" style={{ fontFamily: displayFont }}>
-        <div className="app-header presentation-header">
-          <button className="back-btn" onClick={() => {
-            setSelectedSong(null);
-            setActiveStanza(null);
-            if (window.history.state?.appView === 'song') {
-              window.history.back();
-            }
-          }}>
-            <FaArrowLeft />
-          </button>
-          <h1 style={{ flex: 1, textAlign: 'left', fontSize: '1.1rem', margin: 0 }}>{selectedSong.title}</h1>
-          <button className={`icon-btn ${isEditingSong ? 'active' : ''}`} title="Edit Song" onClick={() => setIsEditingSong(v => !v)}>
-            <FaEdit />
-          </button>
-          <button className="icon-btn" title="Change Font" onClick={() => setShowFontPicker(f => !f)}>
-            <FaFont />
-          </button>
-          <button className="mini-clear-btn" title="Clear TV Screen" onClick={clearScreen}>
-            Clear
-          </button>
-        </div>
-
-        {isEditingSong && (
-          <div className="song-edit-panel">
-            <div className="input-clear-wrap">
-              <input
-                className="modal-input"
-                placeholder="Song Title"
-                value={editTitle}
-                onChange={e => setEditTitle(e.target.value)}
-              />
-              {!!editTitle && <button className="text-clear-btn" onClick={() => setEditTitle('')}>Clear</button>}
-            </div>
-            <div className="song-edit-actions">
-              <button className="add-stanza-btn" onClick={addEditableStanza}>+ Add Stanza</button>
-              <button className="btn-cancel" onClick={() => {
-                setIsEditingSong(false);
-                setEditTitle(selectedSong.title || '');
-                setEditableStanzas([...(selectedSong.stanzas || [])]);
-              }}>
-                <FaTimes style={{ marginRight: 6 }} /> Cancel
-              </button>
-              <button className="btn-save" onClick={saveEditedSongToDb} disabled={savingEdits}>
-                <FaSave style={{ marginRight: 6 }} /> {savingEdits ? 'Saving...' : 'Save To DB'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {showFontPicker && (
-          <div className="font-picker-container">
-            <div className="font-picker">
-              {FONTS.map(f => (
-                <button key={f.value} className={`font-opt ${displayFont === f.value ? 'active' : ''}`}
-                  style={{ fontFamily: f.value }} onClick={() => setDisplayFont(f.value)}>
-                  {f.label}
-                </button>
-              ))}
-            </div>
-            <div className="size-picker">
-              <label>TV Size:</label>
-              <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.max(2, prev - 1))}>-</button>
-              <button className={`size-btn auto-btn ${displayFontSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayFontSize('auto')}>Auto</button>
-              <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.min(20, prev + 1))}>+</button>
-              <span className="size-val">{displayFontSize === 'auto' ? 'Fitting' : `${displayFontSize}vw`}</span>
-              <button className="done-btn" onClick={() => setShowFontPicker(false)}>Done</button>
-            </div>
-          </div>
-        )}
-
-        <div className="content-area">
-          {!selectedSong.isCached && (
-            <button
-              className="web-save-current-btn"
-              onClick={() => handleSaveWebResultToDb({ title: selectedSong.title, url: selectedSong.url })}
-              disabled={!!savingWebSongs[selectedSongSaveKey]}
-            >
-              <FaSave style={{ marginRight: 6 }} /> {savingWebSongs[selectedSongSaveKey] ? 'Saving...' : 'Save This Song To DB'}
-            </button>
-          )}
-
-          {displayStanzas.map((stanza, i) => (
-            <div
-              key={i}
-              className={`stanza-card ${!isEditingSong ? 'presentable' : ''} ${activeStanza === i ? 'active' : ''}`}
-              onClick={!isEditingSong ? () => presentLyrics(stanza, i) : undefined}
-              onKeyDown={!isEditingSong ? (event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  presentLyrics(stanza, i);
-                }
-              } : undefined}
-              role={!isEditingSong ? 'button' : undefined}
-              tabIndex={!isEditingSong ? 0 : undefined}
-            >
-              {isEditingSong ? (
-                <div className="stanza-row">
-                  <div className="input-clear-wrap">
-                    <textarea
-                      className="stanza-textarea"
-                      rows={4}
-                      value={stanza}
-                      onChange={e => updateEditableStanza(i, e.target.value)}
-                    />
-                    {!!stanza && <button className="text-clear-btn" onClick={() => updateEditableStanza(i, '')}>Clear</button>}
-                  </div>
-                  {displayStanzas.length > 1 && (
-                    <button className="remove-stanza" onClick={() => removeEditableStanza(i)}>✕</button>
-                  )}
-                </div>
-              ) : (
-                <pre className="stanza-text" style={{ fontFamily: displayFont }}>{stanza}</pre>
-              )}
-              {!isEditingSong && activeStanza === i && <div className="presented-indicator">Presented</div>}
-            </div>
-          ))}
-        </div>
-      </div>
+      <SongPresentationPage
+        displayFont={displayFont}
+        selectedSong={selectedSong}
+        activeStanza={activeStanza}
+        isEditingSong={isEditingSong}
+        editableStanzas={editableStanzas}
+        setSelectedSong={setSelectedSong}
+        setActiveStanza={setActiveStanza}
+        setIsEditingSong={setIsEditingSong}
+        setEditTitle={setEditTitle}
+        setEditableStanzas={setEditableStanzas}
+        editTitle={editTitle}
+        addEditableStanza={addEditableStanza}
+        saveEditedSongToDb={saveEditedSongToDb}
+        savingEdits={savingEdits}
+        FONTS={FONTS}
+        showFontPicker={showFontPicker}
+        setShowFontPicker={setShowFontPicker}
+        setDisplayFont={setDisplayFont}
+        displayFontSize={displayFontSize}
+        setDisplayFontSize={setDisplayFontSize}
+        handleSaveWebResultToDb={handleSaveWebResultToDb}
+        savingWebSongs={savingWebSongs}
+        presentLyrics={presentLyrics}
+        updateEditableStanza={updateEditableStanza}
+        removeEditableStanza={removeEditableStanza}
+        clearScreen={clearScreen}
+      />
     );
   }
 
-  // ---- Main View ----
   if (showSettings) {
     return (
-      <div className="app-container">
-        <div className="app-header presentation-header">
-          <button className="back-btn" onClick={closeSettingsPage}>
-            <FaArrowLeft />
-          </button>
-          <h1 style={{ flex: 1, textAlign: 'left', fontSize: '1.1rem', margin: 0 }}>Settings</h1>
-        </div>
-
-        <div className="content-area">
-          <div className="stanza-card">
-            <h3 style={{ margin: 0 }}>Presenter Identity</h3>
-            <input
-              className="modal-input"
-              placeholder="Your Name"
-              value={userName}
-              onChange={e => setUserName(e.target.value)}
-            />
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Device: {deviceCode}</div>
-          </div>
-
-          <div className="stanza-card">
-            <h3 style={{ margin: 0 }}>TV Room</h3>
-            <div className="room-control settings-room-control">
-              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Room Code:</label>
-              <input type="text" className="room-input" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} />
-              <button className={`share-btn ${copiedLink ? 'copied' : ''}`} onClick={handleShareLink} title="Copy TV Link">
-                <FaShareAlt /> {copiedLink ? '✓' : ''}
-              </button>
-            </div>
-          </div>
-
-          <div className="stanza-card">
-            <h3 style={{ margin: 0 }}>Offline Present</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 8 }}>
-              Open TV/browser on same hotspot or Wi-Fi network.
-            </p>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 8 }}>
-              Cast Route
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-              <button
-                className={`btn-save ${presentRoutingMode === 'mirror' ? 'active' : ''}`}
-                onClick={() => setPresentRoutingMode('mirror')}
-                style={{ marginTop: 0 }}
-              >
-                Mirror (Online + Offline)
-              </button>
-              <button
-                className={`btn-save ${presentRoutingMode === 'offline' ? 'active' : ''}`}
-                onClick={() => setPresentRoutingMode('offline')}
-                style={{ marginTop: 0 }}
-              >
-                Offline Only
-              </button>
-              <button
-                className={`btn-save ${presentRoutingMode === 'online' ? 'active' : ''}`}
-                onClick={() => setPresentRoutingMode('online')}
-                style={{ marginTop: 0 }}
-              >
-                Online Only
-              </button>
-            </div>
-            {presentRoutingMode === 'offline' && !nativeOfflineServer.running && (
-              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
-                Offline only is selected. Start offline presenter to cast locally.
-              </div>
-            )}
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 4 }}>
-              Simple link: {offlineTvUrlSimple || 'Auto-detecting...'}
-            </div>
-            {autoDetectingLan && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
-                Auto-detecting local server...
-              </div>
-            )}
-          </div>
-
-          <div className="stanza-card">
-            <h3 style={{ margin: 0 }}>LAN / Hotspot Server</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 8 }}>
-              Use server device IP so browser and mobile can connect on the same Wi-Fi or hotspot.
-            </p>
-            <input
-              className="modal-input"
-              placeholder="Server IP (e.g., 192.168.1.35)"
-              value={serverHost}
-              onChange={e => setServerHost(e.target.value)}
-            />
-            <input
-              className="modal-input"
-              placeholder="Port (default 3000)"
-              value={serverPort}
-              onChange={e => setServerPort(e.target.value.replace(/[^0-9]/g, ''))}
-            />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: 8 }}>
-              <input
-                type="checkbox"
-                checked={useLanApi}
-                onChange={e => setUseLanApi(e.target.checked)}
-              />
-              Use LAN host for online API calls
-            </label>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-              API: {apiBase}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              WebSocket: {WS_URL}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Offline LAN IP: {detectedLanHost || 'Not set'}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4, wordBreak: 'break-all' }}>
-              Offline TV URL: {offlineTvUrl || 'Set LAN Server IP to generate link'}
-            </div>
-            <button
-              className="btn-save"
-              style={{ marginTop: 10 }}
-              onClick={checkOfflineServer}
-              disabled={offlineServerStatus.checking}
-            >
-              {offlineServerStatus.checking ? 'Checking...' : 'Check Offline Server'}
-            </button>
-            {offlineServerStatus.message && (
-              <div style={{ color: offlineServerStatus.ok ? '#29a36a' : '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
-                {offlineServerStatus.message}
-              </div>
-            )}
-          </div>
-
-          <div className="stanza-card">
-            <h3 style={{ margin: 0 }}>Offline Sync</h3>
-            <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
-              Pending items: {pendingSyncQueue.length}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Status: {syncState.syncing ? 'Syncing...' : 'Idle'}
-            </div>
-            {syncState.lastRun && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-                Last run: {new Date(syncState.lastRun).toLocaleString()}
-              </div>
-            )}
-            {syncState.lastError && (
-              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
-                Last error: {syncState.lastError}
-              </div>
-            )}
-            <button
-              className="btn-save"
-              style={{ marginTop: 10 }}
-              onClick={runPendingSync}
-              disabled={syncState.syncing || pendingSyncQueue.length === 0}
-            >
-              {syncState.syncing ? 'Syncing...' : 'Sync Now'}
-            </button>
-            <button
-              className="btn-save"
-              style={{ marginTop: 10 }}
-              onClick={downloadAllSongsForOffline}
-              disabled={offlineDownloadState.downloading}
-            >
-              <FaDownload style={{ marginRight: 6 }} />
-              {offlineDownloadState.downloading ? `Downloading... ${offlineDownloadState.downloaded}` : 'Download All Songs Offline'}
-            </button>
-            {offlineDownloadState.lastError && (
-              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
-                Download error: {offlineDownloadState.lastError}
-              </div>
-            )}
-          </div>
-
-          <div className="stanza-card">
-            <h3 style={{ margin: 0 }}>Device File Storage</h3>
-            <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
-              Permission: {storageState.permission}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Enabled: {nativeFileStorageEnabled ? 'Yes' : 'No'}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Loaded: {storageState.loaded ? 'Yes' : 'No'}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Folder: {OFFLINE_STORAGE_FOLDER} ({storageState.directory})
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Cached songs: {storageUsageSummary.offlineSongCount}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Pending sync: {storageUsageSummary.pendingCount}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Cache size est.: {formatBytes(storageUsageSummary.offlineBytes)} + {formatBytes(storageUsageSummary.queueBytes)} = {formatBytes(storageUsageSummary.totalBytes)}
-            </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Large data target: {storageUsageSummary.target}
-            </div>
-            {localSnapshotSavedAt && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-                Local data saved: {new Date(localSnapshotSavedAt).toLocaleString()}
-              </div>
-            )}
-            {storageState.lastSavedAt && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-                Last saved: {new Date(storageState.lastSavedAt).toLocaleString()}
-              </div>
-            )}
-            {storageState.lastError && (
-              <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
-                Storage error: {storageState.lastError}
-              </div>
-            )}
-            {!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
-                Native file storage is disabled in this build for crash safety.
-              </div>
-            )}
-          </div>
-
-          <div className="stanza-card">
-            <h3 style={{ margin: 0 }}>Storage</h3>
-            <button className="clear-btn" onClick={clearLocalSearchCache}>
-              <FaTrash style={{ marginRight: 8 }} /> Clear Saved Search Text
-            </button>
-          </div>
-        </div>
-      </div>
+      <SettingsPage
+        closeSettingsPage={closeSettingsPage}
+        userName={userName}
+        setUserName={setUserName}
+        deviceCode={deviceCode}
+        roomCode={roomCode}
+        setRoomCode={setRoomCode}
+        copiedLink={copiedLink}
+        handleShareLink={handleShareLink}
+        presentRoutingMode={presentRoutingMode}
+        setPresentRoutingMode={setPresentRoutingMode}
+        nativeOfflineServer={nativeOfflineServer}
+        offlineTvUrlSimple={offlineTvUrlSimple}
+        autoDetectingLan={autoDetectingLan}
+        serverHost={serverHost}
+        setServerHost={setServerHost}
+        serverPort={serverPort}
+        setServerPort={setServerPort}
+        useLanApi={useLanApi}
+        setUseLanApi={setUseLanApi}
+        apiBase={apiBase}
+        WS_URL={WS_URL}
+        detectedLanHost={detectedLanHost}
+        offlineTvUrl={offlineTvUrl}
+        checkOfflineServer={checkOfflineServer}
+        offlineServerStatus={offlineServerStatus}
+        pendingSyncQueue={pendingSyncQueue}
+        syncState={syncState}
+        runPendingSync={runPendingSync}
+        downloadAllSongsForOffline={downloadAllSongsForOffline}
+        offlineDownloadState={offlineDownloadState}
+        storageState={storageState}
+        nativeFileStorageEnabled={nativeFileStorageEnabled}
+        OFFLINE_STORAGE_FOLDER={OFFLINE_STORAGE_FOLDER}
+        storageUsageSummary={storageUsageSummary}
+        formatBytes={formatBytes}
+        localSnapshotSavedAt={localSnapshotSavedAt}
+        NATIVE_FILE_STORAGE_ENABLED_IN_BUILD={NATIVE_FILE_STORAGE_ENABLED_IN_BUILD}
+        clearLocalSearchCache={clearLocalSearchCache}
+      />
     );
   }
 
@@ -2825,456 +2535,92 @@ function App() {
   const activeBibleVerseNumber = activeBibleVerseKey ? activeBibleVerseKey.split('-').slice(-1)[0] : '';
 
   return (
-    <div className="app-container">
-      {/* Header */}
-      <div className="app-header">
-        <div className="brand-header">
-          <img src="/logo.png" alt="WorshipCast logo" className="brand-logo" />
-          <h1>WorshipCast</h1>
-        </div>
-        <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-          User: {userName || 'Anonymous'} | Device: {deviceCode}
-        </div>
-        {!isOnline && (
-          <span className="offline-chip"><FaWifi style={{ marginRight: 4 }} />Offline</span>
-        )}
-      </div>
-
-      {showHomeCards ? (
-        <div className="content-area">
-          <div className="home-present-panel">
-            <button
-              className="btn-save"
-              onClick={startPresenterFromHome}
-              disabled={startingOfflinePresent}
-            >
-              {startingOfflinePresent ? 'Starting...' : 'Start Presenter'}
-            </button>
-            {homePresentExpanded && (
-              <>
-                <button className="btn-save" onClick={stopPresenterFromHome}>
-                  Stop Presenter
-                </button>
-                <div className="home-present-link">Online Present: {onlineTvUrl}</div>
-                <div className="home-present-link">Offline Present: {homeOfflineLink || 'Not ready yet'}</div>
-              </>
-            )}
-          </div>
-          <div className="home-cards-grid">
-            {homeCards.map(card => (
-              <button
-                key={card.key}
-                className="home-card"
-                onClick={() => openHomeCard(card.key)}
-              >
-                <span className="home-card-icon">{card.icon}</span>
-                <span className="home-card-label">{card.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : (
-      <div className="content-area">
-        <div className="section-topbar">
-          <button className="back-btn" onClick={() => setShowHomeCards(true)}>
-            <FaArrowLeft />
-          </button>
-          <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
-        </div>
-        {activeTab === 'images' && (
-          <div className="image-share-panel">
-            <div className="image-share-topbar">
-              <button className="btn-save" onClick={() => imageInputRef.current?.click()}>
-                <FaImage style={{ marginRight: 6 }} /> Upload Images
-              </button>
-              <button
-                className={`image-remove-mode-btn ${imageRemoveMode ? 'active' : ''}`}
-                onClick={() => setImageRemoveMode(v => !v)}
-                title="Toggle remove mode"
-              >
-                {imageRemoveMode ? 'Done' : 'Remove'}
-              </button>
-              <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
-              <span className="image-limit-text">{uploadedImages.length}/20 images</span>
-              <input
-                ref={imageInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                style={{ display: 'none' }}
-                onChange={handleImageUpload}
-              />
-            </div>
-
-            <div className="size-picker image-size-picker">
-              <label>Image Size:</label>
-              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.max(20, prev - 5))}>-</button>
-              <button className={`size-btn auto-btn ${displayImageSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayImageSize('auto')}>Auto</button>
-              <button className="size-btn" onClick={() => setDisplayImageSize(prev => prev === 'auto' ? 80 : Math.min(200, prev + 5))}>+</button>
-              <span className="size-val">{displayImageSize === 'auto' ? 'Fitting' : `${displayImageSize}%`}</span>
-            </div>
-
-            <div className="image-grid">
-              {uploadedImages.length === 0 ? (
-                <div className="image-empty">Upload images, then tap one to present it on TV.</div>
-              ) : (
-                uploadedImages.map(imageItem => (
-                  <button
-                    key={imageItem.id}
-                    className={`image-tile ${activeImageId === imageItem.id ? 'active' : ''}`}
-                    onClick={() => {
-                      if (!imageRemoveMode) presentImage(imageItem);
-                    }}
-                  >
-                    {imageRemoveMode && (
-                      <button
-                        className="image-remove-btn"
-                        title="Remove image"
-                        aria-label="Remove image"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          removeUploadedImage(imageItem.id);
-                        }}
-                      >
-                        ×
-                      </button>
-                    )}
-                    <img src={imageItem.dataUrl} alt={imageItem.name} className="image-thumb" />
-                    <span className="image-name">{imageItem.name}</span>
-                    {activeImageId === imageItem.id && <span className="image-presented-badge">Presented</span>}
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'bible' && (
-          <div className="bible-panel">
-            {bibleLoading && <div className="loading">Loading Bible...</div>}
-            {!bibleLoading && bibleError && <div className="bible-error">{bibleError}</div>}
-
-            {!bibleLoading && !bibleError && selectedBibleBook && (
-              <>
-                <div className="bible-top-controls">
-                  <div className="bible-top-row">
-                    <button className="bible-book-title-btn" onClick={() => setShowBibleControls(v => !v)} type="button">
-                      {(selectedBibleBook.tamil || selectedBibleBook.english)} {`- ${bibleChapterNumber}`}
-                    </button>
-                    <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
-                      <FaFont style={{ marginRight: 6 }} /> Font
-                    </button>
-                    <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
-                  </div>
-
-                  {showBibleControls && (
-                    <div className="bible-controls-dropdown">
-                      <select
-                        className="bible-select"
-                        value={selectedBibleBook.english}
-                        onChange={(event) => {
-                          const nextBook = bibleBooks.find(item => item.english === event.target.value);
-                          if (nextBook) openBibleBook(nextBook);
-                        }}
-                      >
-                        {bibleBooks.map(bookItem => (
-                          <option key={bookItem.id} value={bookItem.english}>
-                            {bookItem.tamil || bookItem.english}
-                          </option>
-                        ))}
-                      </select>
-
-                      <div className="bible-inline-selects">
-                        <select
-                          className="bible-select"
-                          value={String(bibleChapterNumber)}
-                          onChange={(event) => {
-                            const chapter = Number(event.target.value);
-                            if (!Number.isNaN(chapter)) {
-                              goToBibleChapter(chapter - 1);
-                            }
-                          }}
-                        >
-                          {(selectedBibleBook.chapters || []).map((chapterItem, idx) => {
-                            const chapterNo = String(chapterItem?.chapter || (idx + 1));
-                            return (
-                              <option key={`${selectedBibleBook.english}-chapter-${chapterNo}`} value={chapterNo}>
-                                Chapter {chapterNo}
-                              </option>
-                            );
-                          })}
-                        </select>
-
-                        <select
-                          className="bible-select"
-                          value={activeBibleVerseNumber || ''}
-                          onChange={(event) => {
-                            if (event.target.value) {
-                              handleBibleVerseSelect(event.target.value);
-                            }
-                          }}
-                        >
-                          <option value="">Verse</option>
-                          {bibleVerses.map((verseItem, idx) => {
-                            const verseNo = String(verseItem?.verse || idx + 1);
-                            return (
-                              <option key={`${selectedBibleBook.english}-verse-${verseNo}`} value={verseNo}>
-                                Verse {verseNo}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {showFontPicker && (
-                  <div className="font-picker-container">
-                    <div className="font-picker">
-                      {FONTS.map(f => (
-                        <button
-                          key={f.value}
-                          className={`font-opt ${displayFont === f.value ? 'active' : ''}`}
-                          style={{ fontFamily: f.value }}
-                          onClick={() => setDisplayFont(f.value)}
-                        >
-                          {f.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="size-picker">
-                      <label>TV Size:</label>
-                      <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.max(2, prev - 1))}>-</button>
-                      <button className={`size-btn auto-btn ${displayFontSize === 'auto' ? 'active' : ''}`} onClick={() => setDisplayFontSize('auto')}>Auto</button>
-                      <button className="size-btn" onClick={() => setDisplayFontSize(prev => prev === 'auto' ? 8 : Math.min(20, prev + 1))}>+</button>
-                      <span className="size-val">{displayFontSize === 'auto' ? 'Fitting' : `${displayFontSize}vw`}</span>
-                      <button className="done-btn" onClick={() => setShowFontPicker(false)}>Done</button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="bible-swipe-hint">Swipe right for previous chapter, swipe left for next chapter.</div>
-
-                <div
-                  ref={bibleVerseListRef}
-                  className="bible-verse-list"
-                  onTouchStart={handleBibleSwipeStart}
-                  onTouchEnd={handleBibleSwipeEnd}
-                >
-                  {bibleVerses.map((verseItem, idx) => {
-                    const verseNo = String(verseItem?.verse || idx + 1);
-                    const verseKey = `${selectedBibleBook.english || ''}-${selectedBibleChapterIndex + 1}-${verseNo}`;
-                    return (
-                      <button
-                        key={verseKey}
-                        data-verse-key={verseKey}
-                        className={`bible-verse-btn ${activeBibleVerseKey === verseKey ? 'active' : ''}`}
-                        onClick={() => presentBibleVerse(verseItem?.text || '', verseNo)}
-                      >
-                        <span className="bible-verse-no">{verseNo}</span>
-                        <span className="bible-verse-text">{verseItem?.text || ''}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Search */}
-        {activeTab !== 'images' && activeTab !== 'bible' && (
-          <div className="search-container">
-            <div className="input-clear-wrap search-wrap">
-              <input
-                type="text"
-                className="search-input"
-                placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : activeTab === 'recents' ? 'Recents' : 'Favorites'}...`}
-                value={tabSearch[activeTab] || ''}
-                onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
-                onKeyDown={e => e.key === 'Enter' && handleSearch()}
-              />
-              {!!(tabSearch[activeTab] || '') && (
-                <button
-                  className="text-clear-btn"
-                  onClick={() => setTabSearch(prev => ({ ...prev, [activeTab]: '' }))}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            <button className="btn" onClick={handleSearch} disabled={loading}><FaSearch /></button>
-            {activeTab === 'db' && (
-              <button className="add-btn" onClick={openAddModal} title="Add Song"><FaPlus /></button>
-            )}
-          </div>
-        )}
-
-        {/* A-Z Filter */}
-        {activeTab === 'db' && (
-          <div className="az-filter">
-            {['ALL', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')].map(letter => (
-              <button
-                key={letter}
-                className={`az-btn ${selectedLetter === letter ? 'active' : ''}`}
-                onClick={() => {
-                  if (letter === 'ALL') { setSelectedLetter(null); setResults([]); setTabSearch(prev => ({ ...prev, db: '' })); }
-                  else handleLetterFilter(letter);
-                }}
-              >{letter}</button>
-            ))}
-          </div>
-        )}
-
-        {activeTab !== 'images' && activeTab !== 'bible' && loading && <div className="loading">Searching...</div>}
-
-        {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length > 0 && (
-          <div className="song-list">
-            {results.map((item, index) => {
-              const isFav = favorites.some(f => f.title === item.title);
-              const isCached = !!offlineCache[item.id];
-              return (
-                <div key={index} className="song-card" onClick={() => handleSongSelect(item)}>
-                  <div style={{ flex: 1 }}>
-                    <p className="song-title">{item.title}</p>
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                      {item.source === 'db' ? '📦 DB' : '🌐 Web'}
-                      {item.offline && ' • 💾 Offline'}
-                      {isCached && item.source === 'db' && ' • ⚡ Cached'}
-                    </span>
-                  </div>
-                  {item.source === 'web' && (
-                    <button
-                      className="web-save-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSaveWebResultToDb(item);
-                      }}
-                      disabled={!!savingWebSongs[item.url || item.title]}
-                    >
-                      <FaSave style={{ marginRight: 6 }} /> {savingWebSongs[item.url || item.title] ? 'Saving...' : 'Save DB'}
-                    </button>
-                  )}
-                  <button className="fav-btn" onClick={e => toggleFavorite(e, item)}>
-                    {isFav ? <FaStar color="#f5b041" size={18} /> : <FaRegStar color="#666" size={18} />}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
-          <div className="loading">No songs found.</div>
-        )}
-        {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length === 0 && selectedLetter && (
-          <div className="loading">No songs starting with "{selectedLetter}".</div>
-        )}
-      </div>
-      )}
-
-      {/* Add Song Modal */}
-      {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2 className="modal-title">Add Song</h2>
-
-            <input
-              className="modal-input"
-              placeholder="Song Title"
-              value={addTitle}
-              onChange={e => setAddTitle(e.target.value)}
-            />
-            {!!addTitle && <button className="text-clear-btn inline-clear-btn" onClick={() => setAddTitle('')}>Clear</button>}
-
-            {/* Mode Toggle */}
-            <div className="mode-toggle">
-              <button className={`mode-btn ${addMode === 'manual' ? 'active' : ''}`} onClick={() => setAddMode('manual')}>
-                ✍️ Manual (Stanza by Stanza)
-              </button>
-              <button className={`mode-btn ${addMode === 'auto' ? 'active' : ''}`} onClick={() => setAddMode('auto')}>
-                ✂️ Auto Split
-              </button>
-            </div>
-
-            {addMode === 'manual' ? (
-              <div className="stanza-editor">
-                {manualStanzas.map((stanza, i) => (
-                  <div key={i} className="stanza-row">
-                    <textarea
-                      className="stanza-textarea"
-                      placeholder={`Stanza ${i + 1}...`}
-                      value={stanza}
-                      onChange={e => updateManualStanza(i, e.target.value)}
-                      rows={3}
-                    />
-                    {!!stanza && <button className="text-clear-btn" onClick={() => updateManualStanza(i, '')}>Clear</button>}
-                    {manualStanzas.length > 1 && (
-                      <button className="remove-stanza" onClick={() => removeManualStanza(i)}>✕</button>
-                    )}
-                  </div>
-                ))}
-                <button className="add-stanza-btn" onClick={addManualStanza}>+ Add Stanza</button>
-              </div>
-            ) : (
-              <div>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: '8px 0 4px' }}>
-                  Paste full lyrics — blank lines will automatically become stanza splits.
-                </p>
-                <textarea
-                  className="stanza-textarea"
-                  style={{ width: '100%', minHeight: 180 }}
-                  placeholder={"Verse 1 line 1\nVerse 1 line 2\n\nVerse 2 line 1\nVerse 2 line 2"}
-                  value={autoText}
-                  onChange={e => setAutoText(e.target.value)}
-                />
-                {!!autoText && <button className="text-clear-btn inline-clear-btn" onClick={() => setAutoText('')}>Clear</button>}
-                {autoText && (
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: 4 }}>
-                    Preview: {autoText.split(/\n\s*\n/).filter(s => s.trim()).length} stanza(s) detected
-                  </p>
-                )}
-              </div>
-            )}
-
-            {addError && <p className="add-error">{addError}</p>}
-
-            <div className="modal-actions">
-              <button className="btn-cancel" onClick={() => setShowAddModal(false)}>Cancel</button>
-              <button className="btn-save" onClick={handleSaveSong} disabled={addSaving}>
-                {addSaving ? 'Saving...' : '💾 Save Song'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showProfileSetup && (
-        <div className="modal-overlay" onClick={e => e.stopPropagation()}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2 className="modal-title">Welcome</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: 0 }}>
-              Enter your name for this device. A unique device code is generated automatically.
-            </p>
-            <input
-              className="modal-input"
-              placeholder="Your Name"
-              value={profileNameInput}
-              onChange={e => setProfileNameInput(e.target.value)}
-            />
-            {!!profileNameInput && <button className="text-clear-btn inline-clear-btn" onClick={() => setProfileNameInput('')}>Clear</button>}
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-              Device Code: {deviceCode}
-            </p>
-            <div className="modal-actions">
-              <button className="btn-save" onClick={completeProfileSetup}>Continue</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    <MainPage
+      userName={userName}
+      deviceCode={deviceCode}
+      isOnline={isOnline}
+      showHomeCards={showHomeCards}
+      startingOfflinePresent={startingOfflinePresent}
+      startPresenterFromHome={startPresenterFromHome}
+      homePresentExpanded={homePresentExpanded}
+      stopPresenterFromHome={stopPresenterFromHome}
+      onlineTvUrl={onlineTvUrl}
+      homeOfflineLink={homeOfflineLink}
+      openHomeCard={openHomeCard}
+      activeTab={activeTab}
+      setShowHomeCards={setShowHomeCards}
+      imageInputRef={imageInputRef}
+      imageRemoveMode={imageRemoveMode}
+      setImageRemoveMode={setImageRemoveMode}
+      clearScreen={clearScreen}
+      uploadedImages={uploadedImages}
+      activeImageId={activeImageId}
+      presentImage={presentImage}
+      removeUploadedImage={removeUploadedImage}
+      handleImageUpload={handleImageUpload}
+      displayImageSize={displayImageSize}
+      setDisplayImageSize={setDisplayImageSize}
+      bibleLoading={bibleLoading}
+      bibleError={bibleError}
+      selectedBibleBook={selectedBibleBook}
+      showBibleControls={showBibleControls}
+      setShowBibleControls={setShowBibleControls}
+      bibleChapterNumber={bibleChapterNumber}
+      showFontPicker={showFontPicker}
+      setShowFontPicker={setShowFontPicker}
+      bibleBooks={bibleBooks}
+      openBibleBook={openBibleBook}
+      goToBibleChapter={goToBibleChapter}
+      activeBibleVerseNumber={activeBibleVerseNumber}
+      handleBibleVerseSelect={handleBibleVerseSelect}
+      bibleVerses={bibleVerses}
+      bibleVerseListRef={bibleVerseListRef}
+      handleBibleSwipeStart={handleBibleSwipeStart}
+      handleBibleSwipeEnd={handleBibleSwipeEnd}
+      selectedBibleChapterIndex={selectedBibleChapterIndex}
+      activeBibleVerseKey={activeBibleVerseKey}
+      presentBibleVerse={presentBibleVerse}
+      FONTS={FONTS}
+      displayFont={displayFont}
+      setDisplayFont={setDisplayFont}
+      displayFontSize={displayFontSize}
+      setDisplayFontSize={setDisplayFontSize}
+      tabSearch={tabSearch}
+      setTabSearch={setTabSearch}
+      handleSearch={handleSearch}
+      loading={loading}
+      openAddModal={openAddModal}
+      selectedLetter={selectedLetter}
+      setSelectedLetter={setSelectedLetter}
+      setResults={setResults}
+      handleLetterFilter={handleLetterFilter}
+      results={results}
+      favorites={favorites}
+      offlineCache={offlineCache}
+      handleSongSelect={handleSongSelect}
+      handleSaveWebResultToDb={handleSaveWebResultToDb}
+      savingWebSongs={savingWebSongs}
+      toggleFavorite={toggleFavorite}
+      showAddModal={showAddModal}
+      setShowAddModal={setShowAddModal}
+      addTitle={addTitle}
+      setAddTitle={setAddTitle}
+      addMode={addMode}
+      setAddMode={setAddMode}
+      manualStanzas={manualStanzas}
+      updateManualStanza={updateManualStanza}
+      removeManualStanza={removeManualStanza}
+      addManualStanza={addManualStanza}
+      autoText={autoText}
+      setAutoText={setAutoText}
+      addError={addError}
+      handleSaveSong={handleSaveSong}
+      addSaving={addSaving}
+      showProfileSetup={showProfileSetup}
+      profileNameInput={profileNameInput}
+      setProfileNameInput={setProfileNameInput}
+      completeProfileSetup={completeProfileSetup}
+    />
   );
 }
 
