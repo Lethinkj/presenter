@@ -273,7 +273,10 @@
             } else {
                 const parsed = parseFloat(String(currentFontSizeType));
                 if (!Number.isNaN(parsed) && parsed > 0) {
-                    currentElement.style.fontSize = parsed + 'vw';
+                    // Intelligent behavior: treat selected size as a preferred maximum,
+                    // and automatically reduce only when content would overflow.
+                    const requestedPx = (window.innerWidth * parsed) / 100;
+                    autoFit(currentElement, requestedPx);
                 } else {
                     currentFontSizeType = 'auto';
                     autoFit(currentElement);
@@ -305,7 +308,7 @@
             }
         }
 
-        function autoFit(element) {
+        function autoFit(element, maxPxCap) {
             const boxWidth = lyricsContainer.clientWidth;
             const boxHeight = lyricsContainer.clientHeight;
             if (!boxWidth || !boxHeight) return;
@@ -314,7 +317,11 @@
             const maxH = boxHeight * 0.98;
             const minPx = 18;
             let low = minPx;
-            let high = Math.max(30, Math.floor(Math.min(boxWidth * 0.28, boxHeight * 0.34)));
+            const naturalHigh = Math.max(30, Math.floor(Math.min(boxWidth * 0.28, boxHeight * 0.34)));
+            const cappedHigh = Number.isFinite(maxPxCap) && maxPxCap > 0
+                ? Math.floor(Math.min(naturalHigh, maxPxCap))
+                : naturalHigh;
+            let high = Math.max(minPx, cappedHigh);
             let best = minPx;
 
             const applyAutoStyles = (sizePx) => {
