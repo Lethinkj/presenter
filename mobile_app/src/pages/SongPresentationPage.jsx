@@ -6,7 +6,6 @@ export default function SongPresentationPage({
   activeStanza,
   isEditingSong,
   editableStanzas,
-  setSelectedSong,
   setActiveStanza,
   setIsEditingSong,
   setEditTitle,
@@ -26,24 +25,22 @@ export default function SongPresentationPage({
   presentLyrics,
   updateEditableStanza,
   removeEditableStanza,
-  clearScreen
+  clearScreen,
+  onBack
 }) {
-  const displayStanzas = isEditingSong ? editableStanzas : selectedSong.stanzas;
-  const selectedSongSaveKey = selectedSong.url || selectedSong.title;
+  const safeSelectedSong = selectedSong || {};
+  const songStanzas = Array.isArray(safeSelectedSong.stanzas) ? safeSelectedSong.stanzas : [];
+  const editorStanzas = Array.isArray(editableStanzas) ? editableStanzas : [];
+  const displayStanzas = isEditingSong ? editorStanzas : songStanzas;
+  const selectedSongSaveKey = safeSelectedSong.url || safeSelectedSong.title || '';
 
   return (
     <div className="app-container" style={{ fontFamily: displayFont }}>
       <div className="app-header presentation-header">
-        <button className="back-btn" onClick={() => {
-          setSelectedSong(null);
-          setActiveStanza(null);
-          if (window.history.state?.appView === 'song') {
-            window.history.back();
-          }
-        }}>
+        <button className="back-btn" onClick={onBack}>
           <FaArrowLeft />
         </button>
-        <h1 style={{ flex: 1, textAlign: 'left', fontSize: '1.1rem', margin: 0 }}>{selectedSong.title}</h1>
+        <h1 style={{ flex: 1, textAlign: 'left', fontSize: '1.1rem', margin: 0 }}>{safeSelectedSong.title || 'Song'}</h1>
         <button className={`icon-btn ${isEditingSong ? 'active' : ''}`} title="Edit Song" onClick={() => setIsEditingSong(v => !v)}>
           <FaEdit />
         </button>
@@ -70,8 +67,8 @@ export default function SongPresentationPage({
             <button className="add-stanza-btn" onClick={addEditableStanza}>+ Add Stanza</button>
             <button className="btn-cancel" onClick={() => {
               setIsEditingSong(false);
-              setEditTitle(selectedSong.title || '');
-              setEditableStanzas([...(selectedSong.stanzas || [])]);
+              setEditTitle(safeSelectedSong.title || '');
+              setEditableStanzas([...songStanzas]);
             }}>
               <FaTimes style={{ marginRight: 6 }} /> Cancel
             </button>
@@ -85,7 +82,7 @@ export default function SongPresentationPage({
       {showFontPicker && (
         <div className="font-picker-container">
           <div className="font-picker">
-            {FONTS.map(f => (
+            {(Array.isArray(FONTS) ? FONTS : []).map(f => (
               <button key={f.value} className={`font-opt ${displayFont === f.value ? 'active' : ''}`}
                 style={{ fontFamily: f.value }} onClick={() => setDisplayFont(f.value)}>
                 {f.label}
@@ -104,14 +101,18 @@ export default function SongPresentationPage({
       )}
 
       <div className="content-area">
-        {!selectedSong.isCached && (
+        {!safeSelectedSong.isCached && !!safeSelectedSong.title && (
           <button
             className="web-save-current-btn"
-            onClick={() => handleSaveWebResultToDb({ title: selectedSong.title, url: selectedSong.url })}
+            onClick={() => handleSaveWebResultToDb({ title: safeSelectedSong.title, url: safeSelectedSong.url })}
             disabled={!!savingWebSongs[selectedSongSaveKey]}
           >
             <FaSave style={{ marginRight: 6 }} /> {savingWebSongs[selectedSongSaveKey] ? 'Saving...' : 'Save This Song To DB'}
           </button>
+        )}
+
+        {displayStanzas.length === 0 && (
+          <div className="loading">Lyrics are not available yet. Please go back and open the song again.</div>
         )}
 
         {displayStanzas.map((stanza, i) => (

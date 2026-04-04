@@ -1448,8 +1448,6 @@ function App() {
     if (selectedSong) {
       setSelectedSong(null);
       setActiveStanza(null);
-      setShowHomeCards(true);
-      setShowSettings(false);
       return true;
     }
     if (showSettings) {
@@ -1530,6 +1528,15 @@ function App() {
     setShowHomeCards(true);
     setResults([]);
     setSelectedLetter(null);
+  };
+
+  const handleSongPageBack = () => {
+    if (window.history.state?.appView === 'song') {
+      window.history.back();
+      return;
+    }
+    setSelectedSong(null);
+    setActiveStanza(null);
   };
 
   // ---- Search ----
@@ -2459,7 +2466,6 @@ function App() {
         activeStanza={activeStanza}
         isEditingSong={isEditingSong}
         editableStanzas={editableStanzas}
-        setSelectedSong={setSelectedSong}
         setActiveStanza={setActiveStanza}
         setIsEditingSong={setIsEditingSong}
         setEditTitle={setEditTitle}
@@ -2480,6 +2486,7 @@ function App() {
         updateEditableStanza={updateEditableStanza}
         removeEditableStanza={removeEditableStanza}
         clearScreen={clearScreen}
+        onBack={handleSongPageBack}
       />
     );
   }

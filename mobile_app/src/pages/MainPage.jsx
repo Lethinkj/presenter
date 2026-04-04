@@ -10,6 +10,7 @@ import {
   FaSave,
   FaSearch,
   FaStar,
+  FaFont,
   FaWifi,
   FaCog
 } from 'react-icons/fa';
@@ -104,6 +105,45 @@ export default function MainPage({
   setProfileNameInput,
   completeProfileSetup
 }) {
+  const parseUrl = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    try {
+      return new URL(raw);
+    } catch {
+      try {
+        return new URL(`https://${raw}`);
+      } catch {
+        return null;
+      }
+    }
+  };
+
+  const unwrapSearchRedirect = (value) => {
+    const parsed = parseUrl(value);
+    if (!parsed) return String(value || '');
+
+    const host = parsed.hostname.toLowerCase();
+    const isDuckDuckGo = host === 'duckduckgo.com' || host.endsWith('.duckduckgo.com');
+    if (!isDuckDuckGo) return parsed.toString();
+
+    const wrapped = parsed.searchParams.get('uddg') || parsed.searchParams.get('u') || parsed.searchParams.get('rut');
+    if (!wrapped) return parsed.toString();
+
+    try {
+      return decodeURIComponent(wrapped);
+    } catch {
+      return wrapped;
+    }
+  };
+
+  const getWebDomain = (url) => {
+    const unwrapped = unwrapSearchRedirect(url);
+    const parsed = parseUrl(unwrapped);
+    if (!parsed) return 'Web';
+    return parsed.hostname.replace(/^www\./i, '') || 'Web';
+  };
+
   const homeCards = [
     { key: 'db', label: 'DB Search', icon: <FaDatabase /> },
     { key: 'web', label: 'Web Search', icon: <FaGlobe /> },
@@ -116,18 +156,20 @@ export default function MainPage({
 
   return (
     <div className="app-container">
-      <div className="app-header">
-        <div className="brand-header">
-          <img src="/logo.png" alt="WorshipCast logo" className="brand-logo" />
-          <h1>WorshipCast</h1>
+      {activeTab !== 'bible' && (
+        <div className="app-header">
+          <div className="brand-header">
+            <img src="/logo.png" alt="WorshipCast logo" className="brand-logo" />
+            <h1>WorshipCast</h1>
+          </div>
+          <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+            User: {userName || 'Anonymous'} | Device: {deviceCode}
+          </div>
+          {!isOnline && (
+            <span className="offline-chip"><FaWifi style={{ marginRight: 4 }} />Offline</span>
+          )}
         </div>
-        <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-          User: {userName || 'Anonymous'} | Device: {deviceCode}
-        </div>
-        {!isOnline && (
-          <span className="offline-chip"><FaWifi style={{ marginRight: 4 }} />Offline</span>
-        )}
-      </div>
+      )}
 
       {showHomeCards ? (
         <div className="content-area">
@@ -163,12 +205,20 @@ export default function MainPage({
           </div>
         </div>
       ) : (
-        <div className="content-area">
+        <div className={`content-area ${activeTab === 'bible' ? 'bible-content-area' : ''}`}>
           <div className="section-topbar">
             <button className="back-btn" onClick={() => setShowHomeCards(true)}>
               <FaArrowLeft />
             </button>
             <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
+            {activeTab === 'bible' && (
+              <div className="section-actions">
+                <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
+                  <FaFont style={{ marginRight: 6 }} /> Font
+                </button>
+                <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
+              </div>
+            )}
           </div>
           {activeTab === 'images' && (
             <ImagePage
@@ -271,7 +321,7 @@ export default function MainPage({
                     <div style={{ flex: 1 }}>
                       <p className="song-title">{item.title}</p>
                       <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                        {item.source === 'db' ? '📦 DB' : '🌐 Web'}
+                        {item.source === 'db' ? '📦 DB' : `🌐 ${getWebDomain(item.url)}`}
                         {item.offline && ' • 💾 Offline'}
                         {isCached && item.source === 'db' && ' • ⚡ Cached'}
                       </span>

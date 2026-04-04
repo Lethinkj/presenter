@@ -36,14 +36,10 @@ export default function BiblePage({
       {!bibleLoading && !bibleError && selectedBibleBook && (
         <>
           <div className="bible-top-controls">
-            <div className="bible-top-row">
+            <div className="bible-header-row">
               <button className="bible-book-title-btn" onClick={() => setShowBibleControls(v => !v)} type="button">
                 {(selectedBibleBook.tamil || selectedBibleBook.english)} {`- ${bibleChapterNumber}`}
               </button>
-              <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
-                <FaFont style={{ marginRight: 6 }} /> Font
-              </button>
-              <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
             </div>
 
             {showBibleControls && (
@@ -132,8 +128,6 @@ export default function BiblePage({
               </div>
             </div>
           )}
-
-          <div className="bible-swipe-hint">Swipe right for previous chapter, swipe left for next chapter.</div>
 
           <div
             ref={bibleVerseListRef}
