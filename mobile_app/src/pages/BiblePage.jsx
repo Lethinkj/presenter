@@ -53,6 +53,43 @@ const scoreBookMatch = (query, bookName) => {
   return 0;
 };
 
+const ONE_CHAPTER_BOOKS = new Set([
+  'obadiah',
+  'philemon',
+  '2john',
+  '3john',
+  'jude'
+]);
+
+const isSingleChapterBook = (bookName) => ONE_CHAPTER_BOOKS.has(normalizeSearchText(bookName));
+
+const parseQuickSelectInput = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return { raw: '', bookText: '', numbers: [], chapter: '', verse: '', hasDigits: false };
+  }
+
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  const trailingNumbers = [];
+
+  while (tokens.length > 0 && /^\d+$/.test(tokens[tokens.length - 1])) {
+    trailingNumbers.unshift(tokens.pop());
+  }
+
+  const bookText = tokens.join(' ').trim();
+  const chapter = trailingNumbers.length > 0 ? trailingNumbers[trailingNumbers.length - 2] || trailingNumbers[0] : '';
+  const verse = trailingNumbers.length > 1 ? trailingNumbers[trailingNumbers.length - 1] : '';
+
+  return {
+    raw,
+    bookText,
+    numbers: trailingNumbers,
+    chapter,
+    verse,
+    hasDigits: trailingNumbers.length > 0
+  };
+};
+
 export default function BiblePage({
   bibleLoading,
   bibleError,
@@ -87,9 +124,11 @@ export default function BiblePage({
   const [quickSelectValue, setQuickSelectValue] = useState('');
   const [quickSelectMessage, setQuickSelectMessage] = useState('');
 
+  const parsedQuickSelect = useMemo(() => parseQuickSelectInput(quickSelectValue), [quickSelectValue]);
+
   const bookSuggestions = useMemo(() => {
     if (quickSelectPhase !== 'book') return [];
-    const query = quickSelectValue.trim();
+    const query = parsedQuickSelect.bookText || quickSelectValue.trim();
     if (!query) return [];
 
     return (Array.isArray(bibleBooks) ? bibleBooks : [])
@@ -100,9 +139,21 @@ export default function BiblePage({
       .filter(item => item.score > 0)
       .sort((left, right) => right.score - left.score || left.book.english.localeCompare(right.book.english))
       .slice(0, 5);
-  }, [bibleBooks, quickSelectPhase, quickSelectValue]);
+  }, [bibleBooks, parsedQuickSelect.bookText, quickSelectPhase, quickSelectValue]);
 
   const bestBookSuggestion = bookSuggestions[0] || null;
+  const previewBook = bestBookSuggestion?.book || null;
+  const previewReference = previewBook
+    ? (() => {
+      const singleChapter = isSingleChapterBook(previewBook.english);
+      if (singleChapter && parsedQuickSelect.numbers.length > 0) {
+        const verseNo = parsedQuickSelect.verse || parsedQuickSelect.chapter || parsedQuickSelect.numbers[0];
+        return `${previewBook.english} 1:${verseNo}`;
+      }
+
+      return `${previewBook.english}${parsedQuickSelect.chapter ? ` ${parsedQuickSelect.chapter}${parsedQuickSelect.verse ? `:${parsedQuickSelect.verse}` : ''}` : ''}`;
+    })()
+    : '';
 
   useEffect(() => {
     if (!quickSelectOpen) return;
@@ -113,11 +164,27 @@ export default function BiblePage({
     return () => cancelAnimationFrame(frame);
   }, [quickSelectOpen, quickSelectPhase]);
 
+  useEffect(() => {
+    if (!activeBibleVerseKey) return;
+
+    const frame = requestAnimationFrame(() => {
+      const container = bibleVerseListRef.current;
+      if (!container) return;
+
+      const target = container.querySelector(`[data-verse-key="${activeBibleVerseKey}"]`);
+      if (target && typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [activeBibleVerseKey, bibleVerseListRef, selectedBibleChapterIndex]);
+
   const openQuickSelect = () => {
     setQuickSelectOpen(true);
     setQuickSelectPhase('book');
     setQuickSelectValue('');
-    setQuickSelectMessage('Type a book name, then press Enter.');
+    setQuickSelectMessage('Type a book name or shorthand like "1 chr 12 3".');
   };
 
   const closeQuickSelect = () => {
@@ -135,10 +202,31 @@ export default function BiblePage({
         return;
       }
 
-      await openBibleBook(chosenBook);
-      setQuickSelectPhase('chapter');
-      setQuickSelectValue('');
-      setQuickSelectMessage('Type chapter number, then press Enter.');
+      if (parsedQuickSelect.numbers.length > 0) {
+        const singleChapter = isSingleChapterBook(chosenBook.english);
+        const chapterNumber = singleChapter ? 1 : parsedQuickSelect.chapter;
+        const verseNumber = singleChapter
+          ? (parsedQuickSelect.verse || parsedQuickSelect.chapter || parsedQuickSelect.numbers[0])
+          : (parsedQuickSelect.verse || '');
+
+        await openBibleBook(chosenBook, {
+          chapterNumber,
+          verseNumber
+        });
+        closeQuickSelect();
+        return;
+      }
+
+      const loadedBook = await openBibleBook(chosenBook);
+      if (Array.isArray(loadedBook?.chapters) && loadedBook.chapters.length === 1) {
+        setQuickSelectPhase('verse');
+        setQuickSelectValue('');
+        setQuickSelectMessage('Single-chapter book. Type verse number, then press Enter.');
+      } else {
+        setQuickSelectPhase('chapter');
+        setQuickSelectValue('');
+        setQuickSelectMessage('Type chapter number, then press Enter.');
+      }
       return;
     }
 
@@ -171,18 +259,25 @@ export default function BiblePage({
 
   const handleQuickSelectChange = (event) => {
     const nextValue = event.target.value;
+    const nextParsed = parseQuickSelectInput(nextValue);
     setQuickSelectValue(nextValue);
     setQuickSelectMessage('');
 
     if (quickSelectPhase === 'book') {
-      const normalized = normalizeSearchText(nextValue);
+      const normalized = normalizeSearchText(nextParsed.bookText || nextValue);
       const exactMatch = (Array.isArray(bibleBooks) ? bibleBooks : []).find(book => normalizeSearchText(book.english) === normalized);
       if (exactMatch && normalized.length > 0) {
         void (async () => {
-          await openBibleBook(exactMatch);
-          setQuickSelectPhase('chapter');
-          setQuickSelectValue('');
-          setQuickSelectMessage('Type chapter number, then press Enter.');
+          const loadedBook = await openBibleBook(exactMatch);
+          if (Array.isArray(loadedBook?.chapters) && loadedBook.chapters.length === 1) {
+            setQuickSelectPhase('verse');
+            setQuickSelectValue('');
+            setQuickSelectMessage('Single-chapter book. Type verse number, then press Enter.');
+          } else {
+            setQuickSelectPhase('chapter');
+            setQuickSelectValue('');
+            setQuickSelectMessage('Type chapter number, then press Enter.');
+          }
         })();
       }
     }
@@ -211,10 +306,28 @@ export default function BiblePage({
 
   const handleSuggestionClick = (book) => {
     void (async () => {
-      await openBibleBook(book);
-      setQuickSelectPhase('chapter');
-      setQuickSelectValue('');
-      setQuickSelectMessage('Type chapter number, then press Enter.');
+      if (parsedQuickSelect.numbers.length > 0) {
+        const singleChapter = isSingleChapterBook(book.english);
+        await openBibleBook(book, {
+          chapterNumber: singleChapter ? 1 : parsedQuickSelect.chapter,
+          verseNumber: singleChapter
+            ? (parsedQuickSelect.verse || parsedQuickSelect.chapter || parsedQuickSelect.numbers[0])
+            : (parsedQuickSelect.verse || '')
+        });
+        closeQuickSelect();
+        return;
+      }
+
+      const loadedBook = await openBibleBook(book);
+      if (Array.isArray(loadedBook?.chapters) && loadedBook.chapters.length === 1) {
+        setQuickSelectPhase('verse');
+        setQuickSelectValue('');
+        setQuickSelectMessage('Single-chapter book. Type verse number, then press Enter.');
+      } else {
+        setQuickSelectPhase('chapter');
+        setQuickSelectValue('');
+        setQuickSelectMessage('Type chapter number, then press Enter.');
+      }
     })();
   };
 
@@ -269,9 +382,21 @@ export default function BiblePage({
                   <span>{quickSelectMessage || 'Press Enter to confirm.'}</span>
                 </div>
 
+                {quickSelectPhase === 'verse' && selectedBibleBook && isSingleChapterBook(selectedBibleBook.english) && (
+                  <div className="bible-quick-select-preview">
+                    Single-chapter book: enter verse only, for example 3.
+                  </div>
+                )}
+
+                {quickSelectPhase === 'book' && previewReference && (
+                  <div className="bible-quick-select-preview">
+                    Interpreted as: {previewReference}
+                  </div>
+                )}
+
                 {quickSelectPhase === 'book' && bestBookSuggestion && (
                   <button className="bible-quick-select-suggestion" type="button" onClick={() => handleSuggestionClick(bestBookSuggestion.book)}>
-                    Suggested: {bestBookSuggestion.book.english}
+                    Suggested: {previewReference || bestBookSuggestion.book.english}
                   </button>
                 )}
 

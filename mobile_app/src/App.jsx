@@ -1950,7 +1950,7 @@ function App() {
     }
   };
 
-  const openBibleBook = async (bookMeta) => {
+  const openBibleBook = async (bookMeta, options = {}) => {
     if (!bookMeta?.english) return;
     setBibleLoading(true);
     setBibleError('');
@@ -1961,18 +1961,68 @@ function App() {
       if (!response.ok) throw new Error('Failed to load book data');
       const data = await response.json();
       const chapters = Array.isArray(data?.chapters) ? data.chapters : [];
-
-      setSelectedBibleBook({
+      const targetChapterNumber = Number(options?.chapterNumber);
+      const hasTargetChapter = Number.isInteger(targetChapterNumber) && targetChapterNumber > 0;
+      const chapterIndex = hasTargetChapter
+        ? Math.max(0, Math.min(chapters.length - 1, targetChapterNumber - 1))
+        : 0;
+      const targetVerseNumber = options?.verseNumber !== undefined && options?.verseNumber !== null
+        ? String(options.verseNumber).trim()
+        : '';
+      const targetChapter = chapters[chapterIndex];
+      const targetVerses = Array.isArray(targetChapter?.verses) ? targetChapter.verses : [];
+      const targetVerse = targetVerseNumber
+        ? targetVerses.find((item, idx) => String(item?.verse || idx + 1) === targetVerseNumber)
+        : null;
+      const loadedBook = {
         english: data?.book?.english || bookMeta.english,
         tamil: data?.book?.tamil || bookMeta.tamil,
         chapters
-      });
-      setSelectedBibleChapterIndex(0);
+      };
+
+      setSelectedBibleBook(loadedBook);
+      setSelectedBibleChapterIndex(chapterIndex);
       setActiveBibleVerseKey('');
       setActiveBibleVerseText('');
       setActiveBibleReference('');
+
+      if (targetVerse) {
+        const verseNo = String(targetVerse?.verse || targetVerseNumber);
+        const cleanText = String(targetVerse?.text || '').trim();
+        if (cleanText) {
+          const reference = `${loadedBook.tamil || loadedBook.english || ''} ${chapterIndex + 1}:${verseNo}`.trim();
+          const key = `${loadedBook.english || ''}-${chapterIndex + 1}-${verseNo}`;
+
+          setActiveBibleVerseKey(key);
+          setActiveBibleVerseText(cleanText);
+          setActiveBibleReference(reference);
+
+          const payload = {
+            type: 'present',
+            text: cleanText,
+            reference,
+            room: roomCode,
+            font: displayFont,
+            fontSize: displayFontSize,
+            name: userNameRef.current || 'Anonymous',
+            deviceCode: deviceCodeRef.current
+          };
+
+          const attemptId = ++presentAttemptRef.current;
+          const sentImmediately = sendPresentationPayload(payload);
+          if (!sentImmediately) {
+            setTimeout(() => {
+              if (presentAttemptRef.current !== attemptId) return;
+              sendPresentationPayload(payload);
+            }, 220);
+          }
+        }
+      }
+
+      return loadedBook;
     } catch {
       setBibleError('Failed to load selected book.');
+      return null;
     } finally {
       setBibleLoading(false);
     }
