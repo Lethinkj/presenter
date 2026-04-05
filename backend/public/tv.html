@@ -117,7 +117,22 @@
     <div id="verse-reference"></div>
 
     <div id="status">Connecting...</div>
+<script>
+function keepScreenAwake() {
+  setInterval(() => {
+    // Fake tiny interaction
+    window.dispatchEvent(new Event('mousemove'));
+    
+    // Or force repaint
+    document.body.style.opacity = '0.9999';
+    setTimeout(() => {
+      document.body.style.opacity = '1';
+    }, 100);
+  }, 20000); // every 20 seconds
+}
 
+keepScreenAwake();
+</script>
     <script>
         const lyricsContainer = document.getElementById('lyrics-container');
         const statusElement = document.getElementById('status');
