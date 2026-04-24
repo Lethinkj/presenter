@@ -118,20 +118,74 @@
 
     <div id="status">Connecting...</div>
 <script>
-function keepScreenAwake() {
-  setInterval(() => {
-    // Fake tiny interaction
-    window.dispatchEvent(new Event('mousemove'));
-    
-    // Or force repaint
-    document.body.style.opacity = '0.9999';
-    setTimeout(() => {
-      document.body.style.opacity = '1';
-    }, 100);
-  }, 20000); // every 20 seconds
+// --- Screen-saver prevention ---
+// Strategy 1: Screen Wake Lock API (modern browsers, most reliable)
+let wakeLock = null;
+
+async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) return false;
+    try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+        return true;
+    } catch (err) {
+        console.warn('Wake Lock request failed:', err);
+        return false;
+    }
 }
 
-keepScreenAwake();
+// Re-acquire wake lock when the page becomes visible again
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && wakeLock === null) {
+        requestWakeLock();
+    }
+});
+
+// Strategy 2: Hidden silent video (canvas stream) – keeps browser
+// treating the page as "active media" and suppresses the OS screensaver.
+function startSilentVideo() {
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1;
+        canvas.height = 1;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, 1, 1);
+
+        const stream = canvas.captureStream(1); // 1 fps – barely any CPU
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.muted = true;
+        video.loop = true;
+        video.playsInline = true;
+        video.setAttribute('aria-hidden', 'true');
+        video.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
+        document.body.appendChild(video);
+        video.play().catch(() => {});
+    } catch (err) {
+        console.warn('Silent video setup failed:', err);
+    }
+}
+
+// Strategy 3: Periodic repaint fallback (last resort)
+function startRepaintHeartbeat() {
+    setInterval(() => {
+        document.body.style.opacity = '0.9999';
+        setTimeout(() => { document.body.style.opacity = '1'; }, 100);
+    }, 20000);
+}
+
+// Boot all strategies
+requestWakeLock().then(acquired => {
+    if (!acquired) {
+        // Wake Lock unavailable – rely on video + repaint
+        startSilentVideo();
+        startRepaintHeartbeat();
+    } else {
+        // Wake Lock acquired – still start video as belt-and-suspenders
+        startSilentVideo();
+    }
+});
 </script>
     <script>
         const lyricsContainer = document.getElementById('lyrics-container');
