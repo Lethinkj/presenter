@@ -778,7 +778,7 @@ body {
   gap: 0;
   flex: 1;
   min-height: 0;
-  max-height: 82vh;
+  max-height: 78vh;
   overflow-y: auto;
   padding-right: 2px;
 }
