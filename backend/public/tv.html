@@ -104,6 +104,23 @@
             text-overflow: ellipsis;
             padding-bottom: 12px;
         }
+
+        /* Reference-only mode: center and enlarge the reference, hide lyrics */
+        body.ref-only-mode #verse-reference {
+            display: block !important;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 8vw;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: unset;
+            padding-bottom: 0;
+            max-width: 90vw;
+        }
+
+        body.ref-only-mode #lyrics-container {
+            visibility: hidden;
+        }
     </style>
 </head>
 <body>
@@ -231,9 +248,21 @@ requestWakeLock().then(acquired => {
                         verseReferenceElement.style.display = 'none';
                         verseReferenceElement.innerText = '';
                         document.body.classList.remove('ref-visible');
+                        document.body.classList.remove('ref-only-mode');
                         displayImage(data.imageData, data.imageSize);
                         return;
                     }
+
+                    if (data.refOnly) {
+                        document.body.classList.add('ref-only-mode');
+                        document.body.classList.remove('ref-visible');
+                        verseReferenceElement.innerText = data.reference || '';
+                        verseReferenceElement.style.display = 'block';
+                        displayLyrics('', data.fontSize);
+                        return;
+                    }
+
+                    document.body.classList.remove('ref-only-mode');
 
                     if (data.reference) {
                         verseReferenceElement.innerText = data.reference;
@@ -265,6 +294,7 @@ requestWakeLock().then(acquired => {
                     currentElement = null;
                     currentImageElement = null;
                     document.body.classList.remove('image-mode');
+                    document.body.classList.remove('ref-only-mode');
                     verseReferenceElement.style.display = 'none';
                     verseReferenceElement.innerText = '';
                     document.body.classList.remove('ref-visible');

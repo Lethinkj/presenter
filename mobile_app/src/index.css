@@ -717,6 +717,30 @@ body {
   border-color: var(--primary-color);
 }
 
+.bible-ref-only-btn {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-color);
+  color: var(--text-primary);
+  padding: 9px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bible-ref-only-btn:hover {
+  border-color: var(--primary-color);
+}
+
+.bible-ref-only-btn.active {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: #fff;
+}
+
 .bible-inline-selects {
   display: flex;
   gap: 8px;

@@ -457,12 +457,13 @@ function App() {
   const [activeBibleVerseText, setActiveBibleVerseText] = useState('');
   const [activeBibleReference, setActiveBibleReference] = useState('');
   const [showBibleControls, setShowBibleControls] = useState(false);
+  const [bibleRefOnlyMode, setBibleRefOnlyMode] = useState(false);
   const bibleSwipeStartXRef = useRef(null);
   const bibleSwipeStartYRef = useRef(null);
   const bibleVerseListRef = useRef(null);
   const lastFontSyncRef = useRef({ initialized: false, font: '', size: '' });
   const lastImageSizeSyncRef = useRef({ initialized: false, size: '' });
-  const lastBibleFontSyncRef = useRef({ initialized: false, font: '', size: '', verseKey: '' });
+  const lastBibleFontSyncRef = useRef({ initialized: false, font: '', size: '', refOnly: false, verseKey: '' });
 
   // Add Song Modal
   const [showAddModal, setShowAddModal] = useState(false);
@@ -2036,8 +2037,9 @@ function App() {
     const reference = `${selectedBibleBook?.tamil || selectedBibleBook?.english || ''} ${chapterNumber}:${verseNumber}`.trim();
     const payload = {
       type: 'present',
-      text: cleanText,
+      text: bibleRefOnlyMode ? '' : cleanText,
       reference,
+      refOnly: bibleRefOnlyMode,
       room: roomCode,
       font: displayFont,
       fontSize: displayFontSize,
@@ -2219,19 +2221,25 @@ function App() {
     if (!activeBibleVerseKey || !activeBibleVerseText) return;
 
     const previous = lastBibleFontSyncRef.current;
-    const fontChanged = previous.initialized && (previous.font !== displayFont || previous.size !== String(displayFontSize));
+    const settingsChanged = previous.initialized && (
+      previous.font !== displayFont ||
+      previous.size !== String(displayFontSize) ||
+      previous.refOnly !== bibleRefOnlyMode
+    );
     lastBibleFontSyncRef.current = {
       initialized: true,
       font: displayFont,
       size: String(displayFontSize),
+      refOnly: bibleRefOnlyMode,
       verseKey: activeBibleVerseKey
     };
-    if (!fontChanged) return;
+    if (!settingsChanged) return;
 
     const payload = {
       type: 'present',
-      text: activeBibleVerseText,
+      text: bibleRefOnlyMode ? '' : activeBibleVerseText,
       reference: activeBibleReference,
+      refOnly: bibleRefOnlyMode,
       room: roomCode,
       font: displayFont,
       fontSize: displayFontSize,
@@ -2240,7 +2248,7 @@ function App() {
     };
 
     sendPresentationPayload(payload);
-  }, [activeBibleVerseKey, activeBibleVerseText, activeBibleReference, displayFont, displayFontSize, roomCode, sendPresentationPayload]);
+  }, [activeBibleVerseKey, activeBibleVerseText, activeBibleReference, bibleRefOnlyMode, displayFont, displayFontSize, roomCode, sendPresentationPayload]);
 
   const clearScreen = () => {
     setActiveStanza(null);
@@ -2637,6 +2645,8 @@ function App() {
       selectedBibleChapterIndex={selectedBibleChapterIndex}
       activeBibleVerseKey={activeBibleVerseKey}
       presentBibleVerse={presentBibleVerse}
+      bibleRefOnlyMode={bibleRefOnlyMode}
+      setBibleRefOnlyMode={setBibleRefOnlyMode}
       FONTS={FONTS}
       displayFont={displayFont}
       setDisplayFont={setDisplayFont}
