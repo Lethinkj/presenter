@@ -64,6 +64,8 @@ export default function MainPage({
   selectedBibleChapterIndex,
   activeBibleVerseKey,
   presentBibleVerse,
+  bibleRefOnlyMode,
+  setBibleRefOnlyMode,
   FONTS,
   displayFont,
   setDisplayFont,
@@ -215,6 +217,14 @@ export default function MainPage({
               <div className="section-actions">
                 <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
                   <FaFont style={{ marginRight: 6 }} /> Font
+                </button>
+                <button
+                  className={`bible-ref-only-btn${bibleRefOnlyMode ? ' active' : ''}`}
+                  onClick={() => setBibleRefOnlyMode(v => !v)}
+                  title="Reference only mode: show only the verse reference on the TV"
+                  type="button"
+                >
+                  Ref Only
                 </button>
                 <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
               </div>
