@@ -2000,8 +2000,9 @@ function App() {
 
           const payload = {
             type: 'present',
-            text: cleanText,
+            text: bibleRefOnlyMode ? '' : cleanText,
             reference,
+            refOnly: bibleRefOnlyMode,
             room: roomCode,
             font: displayFont,
             fontSize: displayFontSize,
