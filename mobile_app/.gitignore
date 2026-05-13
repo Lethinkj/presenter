@@ -26,3 +26,7 @@ dist-ssr
 # Capacitor / Android / iOS
 android/
 ios/
+
+# Ignore environment variables
+.env
+.env.local
