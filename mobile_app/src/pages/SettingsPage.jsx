@@ -41,7 +41,7 @@ export default function SettingsPage({
   clearLocalSearchCache
 }) {
   return (
-    <div className="app-container">
+    <div className="app-container has-header">
       <div className="app-header presentation-header">
         <button className="back-btn" onClick={closeSettingsPage}>
           <FaArrowLeft />
@@ -104,7 +104,7 @@ export default function SettingsPage({
             </button>
           </div>
           {presentRoutingMode === 'offline' && !nativeOfflineServer.running && (
-            <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+            <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
               Offline only is selected. Start offline presenter to cast locally.
             </div>
           )}
@@ -164,7 +164,7 @@ export default function SettingsPage({
             {offlineServerStatus.checking ? 'Checking...' : 'Check Offline Server'}
           </button>
           {offlineServerStatus.message && (
-            <div style={{ color: offlineServerStatus.ok ? '#29a36a' : '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+            <div style={{ color: offlineServerStatus.ok ? 'var(--success-color)' : 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
               {offlineServerStatus.message}
             </div>
           )}
@@ -184,7 +184,7 @@ export default function SettingsPage({
             </div>
           )}
           {syncState.lastError && (
-            <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+            <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
               Last error: {syncState.lastError}
             </div>
           )}
@@ -206,7 +206,7 @@ export default function SettingsPage({
             {offlineDownloadState.downloading ? `Downloading... ${offlineDownloadState.downloaded}` : 'Download All Songs Offline'}
           </button>
           {offlineDownloadState.lastError && (
-            <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+            <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
               Download error: {offlineDownloadState.lastError}
             </div>
           )}
@@ -249,7 +249,7 @@ export default function SettingsPage({
             </div>
           )}
           {storageState.lastError && (
-            <div style={{ color: '#d35454', fontSize: '0.78rem', marginTop: 6 }}>
+            <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
               Storage error: {storageState.lastError}
             </div>
           )}

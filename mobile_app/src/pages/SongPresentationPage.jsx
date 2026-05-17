@@ -1,4 +1,4 @@
-import { FaArrowLeft, FaEdit, FaFont, FaSave, FaTimes } from 'react-icons/fa';
+import { FaArrowLeft, FaCog, FaEdit, FaFont, FaSave, FaTimes } from 'react-icons/fa';
 
 export default function SongPresentationPage({
   displayFont,
@@ -26,7 +26,8 @@ export default function SongPresentationPage({
   updateEditableStanza,
   removeEditableStanza,
   clearScreen,
-  onBack
+  onBack,
+  openSettingsPage
 }) {
   const safeSelectedSong = selectedSong || {};
   const songStanzas = Array.isArray(safeSelectedSong.stanzas) ? safeSelectedSong.stanzas : [];
@@ -35,7 +36,7 @@ export default function SongPresentationPage({
   const selectedSongSaveKey = safeSelectedSong.url || safeSelectedSong.title || '';
 
   return (
-    <div className="app-container" style={{ fontFamily: displayFont }}>
+    <div className="app-container has-header" style={{ fontFamily: displayFont }}>
       <div className="app-header presentation-header">
         <button className="back-btn" onClick={onBack}>
           <FaArrowLeft />
@@ -46,6 +47,9 @@ export default function SongPresentationPage({
         </button>
         <button className="icon-btn" title="Change Font" onClick={() => setShowFontPicker(f => !f)}>
           <FaFont />
+        </button>
+        <button className="settings-icon-btn top-settings-btn" title="Settings" onClick={openSettingsPage} type="button">
+          <FaCog />
         </button>
         <button className="mini-clear-btn" title="Clear TV Screen" onClick={clearScreen}>
           Clear

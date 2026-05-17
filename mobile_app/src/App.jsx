@@ -399,6 +399,7 @@ function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSettings, setShowSettings] = useState(false);
   const [showHomeCards, setShowHomeCards] = useState(true);
+  const settingsReturnRef = useRef(null);
 
   // Presentation
   const [selectedSong, setSelectedSong] = useState(null);
@@ -1642,17 +1643,27 @@ function App() {
     };
   }, []);
 
+  const restoreViewFromSettings = useCallback(() => {
+    const snapshot = settingsReturnRef.current;
+    setShowSettings(false);
+    if (!snapshot) return;
+    setShowHomeCards(snapshot.showHomeCards);
+    if (snapshot.activeTab) setActiveTab(snapshot.activeTab);
+    if (snapshot.selectedSong) {
+      setSelectedSong(snapshot.selectedSong);
+      setActiveStanza(snapshot.activeStanza ?? null);
+      setIsEditingSong(snapshot.isEditingSong ?? false);
+    }
+  }, []);
+
   const handleInternalBack = useCallback(() => {
+    if (showSettings) {
+      restoreViewFromSettings();
+      return true;
+    }
     if (selectedSong) {
       setSelectedSong(null);
       setActiveStanza(null);
-      return true;
-    }
-    if (showSettings) {
-      setShowSettings(false);
-      setShowHomeCards(true);
-      setResults([]);
-      setSelectedLetter(null);
       return true;
     }
     if (!showHomeCards) {
@@ -1662,7 +1673,7 @@ function App() {
       return true;
     }
     return false;
-  }, [selectedSong, showSettings, showHomeCards]);
+  }, [selectedSong, showSettings, showHomeCards, restoreViewFromSettings]);
 
   // In-app back stack: close song/settings on browser/mobile back before exiting app.
   useEffect(() => {
@@ -1723,15 +1734,18 @@ function App() {
 
   const openSettingsPage = () => {
     if (showSettings) return;
+    settingsReturnRef.current = {
+      showHomeCards,
+      activeTab,
+      selectedSong,
+      activeStanza,
+      isEditingSong
+    };
     setShowSettings(true);
-    setShowHomeCards(false);
   };
 
   const closeSettingsPage = () => {
-    setShowSettings(false);
-    setShowHomeCards(true);
-    setResults([]);
-    setSelectedLetter(null);
+    restoreViewFromSettings();
   };
 
   const handleSongPageBack = () => {
@@ -2730,39 +2744,6 @@ function App() {
   };
 
   // ---- Page Rendering ----
-  if (selectedSong) {
-    return (
-      <SongPresentationPage
-        displayFont={displayFont}
-        selectedSong={selectedSong}
-        activeStanza={activeStanza}
-        isEditingSong={isEditingSong}
-        editableStanzas={editableStanzas}
-        setActiveStanza={setActiveStanza}
-        setIsEditingSong={setIsEditingSong}
-        setEditTitle={setEditTitle}
-        setEditableStanzas={setEditableStanzas}
-        editTitle={editTitle}
-        addEditableStanza={addEditableStanza}
-        saveEditedSongToDb={saveEditedSongToDb}
-        savingEdits={savingEdits}
-        FONTS={FONTS}
-        showFontPicker={showFontPicker}
-        setShowFontPicker={setShowFontPicker}
-        setDisplayFont={setDisplayFont}
-        displayFontSize={displayFontSize}
-        setDisplayFontSize={setDisplayFontSize}
-        handleSaveWebResultToDb={handleSaveWebResultToDb}
-        savingWebSongs={savingWebSongs}
-        presentLyrics={presentLyrics}
-        updateEditableStanza={updateEditableStanza}
-        removeEditableStanza={removeEditableStanza}
-        clearScreen={clearScreen}
-        onBack={handleSongPageBack}
-      />
-    );
-  }
-
   if (showSettings) {
     return (
       <SettingsPage
@@ -2808,6 +2789,40 @@ function App() {
     );
   }
 
+  if (selectedSong) {
+    return (
+      <SongPresentationPage
+        displayFont={displayFont}
+        selectedSong={selectedSong}
+        activeStanza={activeStanza}
+        isEditingSong={isEditingSong}
+        editableStanzas={editableStanzas}
+        setActiveStanza={setActiveStanza}
+        setIsEditingSong={setIsEditingSong}
+        setEditTitle={setEditTitle}
+        setEditableStanzas={setEditableStanzas}
+        editTitle={editTitle}
+        addEditableStanza={addEditableStanza}
+        saveEditedSongToDb={saveEditedSongToDb}
+        savingEdits={savingEdits}
+        FONTS={FONTS}
+        showFontPicker={showFontPicker}
+        setShowFontPicker={setShowFontPicker}
+        setDisplayFont={setDisplayFont}
+        displayFontSize={displayFontSize}
+        setDisplayFontSize={setDisplayFontSize}
+        handleSaveWebResultToDb={handleSaveWebResultToDb}
+        savingWebSongs={savingWebSongs}
+        presentLyrics={presentLyrics}
+        updateEditableStanza={updateEditableStanza}
+        removeEditableStanza={removeEditableStanza}
+        clearScreen={clearScreen}
+        onBack={handleSongPageBack}
+        openSettingsPage={openSettingsPage}
+      />
+    );
+  }
+
   const selectedBibleChapter = selectedBibleBook?.chapters?.[selectedBibleChapterIndex] || null;
   const bibleVerses = Array.isArray(selectedBibleChapter?.verses) ? selectedBibleChapter.verses : [];
   const bibleChapterNumber = Number(selectedBibleChapter?.chapter || (selectedBibleChapterIndex + 1));
@@ -2826,6 +2841,7 @@ function App() {
       onlineTvUrl={onlineTvUrl}
       homeOfflineLink={homeOfflineLink}
       openHomeCard={openHomeCard}
+      openSettingsPage={openSettingsPage}
       activeTab={activeTab}
       setShowHomeCards={setShowHomeCards}
       imageInputRef={imageInputRef}

@@ -105,7 +105,8 @@ export default function MainPage({
   showProfileSetup,
   profileNameInput,
   setProfileNameInput,
-  completeProfileSetup
+  completeProfileSetup,
+  openSettingsPage
 }) {
   const parseUrl = (value) => {
     const raw = String(value || '').trim();
@@ -157,15 +158,25 @@ export default function MainPage({
   ];
 
   return (
-    <div className="app-container">
-      {activeTab !== 'bible' && (
-        <div className="app-header">
-          <div className="brand-header">
-            <img src="/logo.png" alt="WorshipCast logo" className="brand-logo" />
-            <h1>WorshipCast</h1>
+    <div className={`app-container ${showHomeCards ? 'has-header' : 'no-header'}`}>
+      {showHomeCards && (
+        <div className="app-header home-header">
+          <div className="home-header-row">
+            <div className="brand-header">
+              <img src="/logo.png" alt="WorshipCast logo" className="brand-logo" />
+              <h1>WorshipCast</h1>
+            </div>
+            <button
+              className="settings-icon-btn"
+              onClick={() => openHomeCard('settings')}
+              title="Settings"
+              type="button"
+            >
+              <FaCog />
+            </button>
           </div>
-          <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-            User: {userName || 'Anonymous'} | Device: {deviceCode}
+          <div className="home-welcome">
+            Welcome, {userName || 'Anonymous'} | Device: {deviceCode}
           </div>
           {!isOnline && (
             <span className="offline-chip"><FaWifi style={{ marginRight: 4 }} />Offline</span>
@@ -213,22 +224,32 @@ export default function MainPage({
               <FaArrowLeft />
             </button>
             <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
-            {activeTab === 'bible' && (
-              <div className="section-actions">
-                <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
-                  <FaFont style={{ marginRight: 6 }} /> Font
-                </button>
-                <button
-                  className={`bible-ref-only-btn${bibleRefOnlyMode ? ' active' : ''}`}
-                  onClick={() => setBibleRefOnlyMode(v => !v)}
-                  title="Reference only mode: show only the verse reference on the TV"
-                  type="button"
-                >
-                  Ref Only
-                </button>
-                <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
-              </div>
-            )}
+            <div className="section-actions">
+              {activeTab === 'bible' && (
+                <>
+                  <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
+                    <FaFont style={{ marginRight: 6 }} /> Font
+                  </button>
+                  <button
+                    className={`bible-ref-only-btn${bibleRefOnlyMode ? ' active' : ''}`}
+                    onClick={() => setBibleRefOnlyMode(v => !v)}
+                    title="Reference only mode: show only the verse reference on the TV"
+                    type="button"
+                  >
+                    Ref Only
+                  </button>
+                  <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
+                </>
+              )}
+              <button
+                className="settings-icon-btn top-settings-btn"
+                onClick={openSettingsPage}
+                title="Settings"
+                type="button"
+              >
+                <FaCog />
+              </button>
+            </div>
           </div>
           {activeTab === 'images' && (
             <ImagePage
