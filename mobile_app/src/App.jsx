@@ -6,6 +6,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import SongPresentationPage from './pages/SongPresentationPage';
 import SettingsPage from './pages/SettingsPage';
 import MainPage from './pages/MainPage';
+import { initOfflineSqlite, loadOfflineSongs, upsertOfflineSong, bulkUpsertOfflineSongs, deleteOfflineSong } from './offlineSqlite';
 
 // Supabase
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvwjzkoia.supabase.co';
@@ -251,6 +252,9 @@ const OFFLINE_DATA_FILE_PATH = `${OFFLINE_STORAGE_FOLDER}/offline-data.json`;
 const OFFLINE_STORAGE_DIR_FALLBACK = Directory.Data;
 const NATIVE_FILE_STORAGE_ENABLED_IN_BUILD = true;
 const LOCAL_DATA_SNAPSHOT_KEY = 'worship_local_data_snapshot';
+const OFFLINE_CACHE_CHUNK_META = 'worship_offline_cache_chunks';
+const OFFLINE_CACHE_CHUNK_PREFIX = 'worship_offline_cache_chunk_';
+const OFFLINE_CACHE_CHUNK_SIZE = 400;
 const DEFAULT_PRESENT_ROUTING_MODE = 'mirror';
 const normalizePresentRoutingMode = (value) => {
   const mode = String(value || '').trim().toLowerCase();
@@ -292,6 +296,23 @@ const readJsonLocalStorageSafely = (key, fallbackValue, options = {}) => {
   } catch {
     return fallbackValue;
   }
+};
+
+const readOfflineCacheFromLocalStorage = () => {
+  const meta = readJsonLocalStorageSafely(OFFLINE_CACHE_CHUNK_META, null, { maxChars: 2000 });
+  if (meta && Number.isInteger(meta.count) && meta.count > 0) {
+    const combined = {};
+    for (let i = 0; i < meta.count; i += 1) {
+      const chunk = readJsonLocalStorageSafely(`${OFFLINE_CACHE_CHUNK_PREFIX}${i}`, {}, { maxChars: 250000 });
+      if (chunk && typeof chunk === 'object' && !Array.isArray(chunk)) {
+        Object.assign(combined, chunk);
+      }
+    }
+    return combined;
+  }
+
+  const legacy = readJsonLocalStorageSafely('worship_offline_cache', {}, { maxChars: 120000 });
+  return legacy && typeof legacy === 'object' && !Array.isArray(legacy) ? legacy : {};
 };
 
 const estimateUtf8Bytes = (value) => {
@@ -394,6 +415,7 @@ function App() {
   const reconnectDelayRef = useRef(1500);
   const presentAttemptRef = useRef(0);
   const ensureConnectedRef = useRef(() => {});
+  const lastBackPressRef = useRef(0);
   const [activeStanza, setActiveStanza] = useState(null);
   const [isEditingSong, setIsEditingSong] = useState(false);
   const [editTitle, setEditTitle] = useState('');
@@ -474,6 +496,9 @@ function App() {
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState('');
 
+  const sqliteEnabled = Capacitor.isNativePlatform();
+  const sqliteReadyRef = useRef(false);
+
   // Favorites & Offline Cache
   const [favorites, setFavorites] = useState(() => {
     const parsed = readJsonLocalStorageSafely('worship_favorites', [], { maxChars: 40000 });
@@ -484,8 +509,7 @@ function App() {
     return Array.isArray(parsed) ? parsed : [];
   });
   const [offlineCache, setOfflineCache] = useState(() => {
-    const parsed = readJsonLocalStorageSafely('worship_offline_cache', {}, { maxChars: 120000 });
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return readOfflineCacheFromLocalStorage();
   });
   const [pendingSyncQueue, setPendingSyncQueue] = useState(() => {
     const parsed = readJsonLocalStorageSafely('worship_pending_sync_queue', [], { maxChars: 60000 });
@@ -557,7 +581,105 @@ function App() {
   useEffect(() => { pendingQueueRef.current = pendingSyncQueue; }, [pendingSyncQueue]);
   useEffect(() => { offlineCacheRef.current = offlineCache; }, [offlineCache]);
 
+  const upsertOfflineSongSqlite = useCallback(async (song) => {
+    if (!sqliteEnabled || !sqliteReadyRef.current) return;
+    try {
+      await upsertOfflineSong(song);
+    } catch (err) {
+      setStorageState(prev => ({
+        ...prev,
+        lastError: `SQLite upsert failed: ${err?.message || err}`
+      }));
+    }
+  }, [sqliteEnabled]);
+
+  const bulkUpsertOfflineSongsSqlite = useCallback(async (songs) => {
+    if (!sqliteEnabled || !sqliteReadyRef.current) return;
+    try {
+      await bulkUpsertOfflineSongs(songs);
+    } catch (err) {
+      setStorageState(prev => ({
+        ...prev,
+        lastError: `SQLite bulk insert failed: ${err?.message || err}`
+      }));
+    }
+  }, [sqliteEnabled]);
+
+  const deleteOfflineSongSqlite = useCallback(async (songId) => {
+    if (!sqliteEnabled || !sqliteReadyRef.current) return;
+    try {
+      await deleteOfflineSong(songId);
+    } catch (err) {
+      setStorageState(prev => ({
+        ...prev,
+        lastError: `SQLite delete failed: ${err?.message || err}`
+      }));
+    }
+  }, [sqliteEnabled]);
+
+  useEffect(() => {
+    if (!sqliteEnabled) return;
+    let cancelled = false;
+
+    const loadSqlite = async () => {
+      try {
+        const ok = await initOfflineSqlite();
+        if (!ok) return;
+
+        const songs = await loadOfflineSongs();
+        if (cancelled) return;
+
+        if (songs.length > 0) {
+          const map = {};
+          for (const song of songs) {
+            map[song.id] = song;
+          }
+          setOfflineCache(map);
+        } else {
+          const localCache = offlineCacheRef.current || {};
+          const localList = Object.values(localCache);
+          if (localList.length) {
+            await bulkUpsertOfflineSongs(localList);
+          }
+        }
+
+        sqliteReadyRef.current = true;
+        setStorageState(prev => ({
+          ...prev,
+          loaded: true,
+          directory: 'SQLite',
+          permission: 'app-data-only',
+          lastError: ''
+        }));
+      } catch (err) {
+        if (!cancelled) {
+          sqliteReadyRef.current = false;
+          setStorageState(prev => ({
+            ...prev,
+            lastError: `SQLite init failed: ${err?.message || err}`
+          }));
+        }
+      }
+    };
+
+    loadSqlite();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sqliteEnabled]);
+
   const writeLocalStorage = useCallback((key, value, label = 'local storage') => {
+    if (
+      sqliteEnabled &&
+      (key === 'worship_offline_cache' ||
+        key.startsWith(OFFLINE_CACHE_CHUNK_PREFIX) ||
+        key === OFFLINE_CACHE_CHUNK_META ||
+        key === 'worship_pending_sync_queue' ||
+        key === LOCAL_DATA_SNAPSHOT_KEY)
+    ) {
+      return true;
+    }
     const error = setLocalStorageSafely(key, value);
     if (!error) return true;
 
@@ -638,6 +760,7 @@ function App() {
   }, []);
 
   const saveOfflineDataToDevice = useCallback(async () => {
+    if (sqliteEnabled) return;
     if (!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD) return;
     if (!Capacitor.isNativePlatform()) return;
     if (!nativeFileStorageEnabled) return;
@@ -664,6 +787,11 @@ function App() {
   }, [nativeFileStorageEnabled]);
 
   const loadOfflineDataFromDevice = useCallback(async () => {
+    if (sqliteEnabled) {
+      nativeStorageLoadedRef.current = true;
+      setStorageState(prev => ({ ...prev, loaded: true, directory: 'SQLite' }));
+      return;
+    }
     if (!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD) {
       nativeStorageLoadedRef.current = true;
       setStorageState(prev => ({ ...prev, loaded: true, permission: 'disabled-in-build' }));
@@ -748,10 +876,21 @@ function App() {
     const cleanTitle = String(title || '').trim();
     const cleanStanzas = (stanzas || []).map(s => String(s || '').trim()).filter(Boolean);
 
+    const localEntry = {
+      id: localId,
+      title: cleanTitle,
+      stanzas: cleanStanzas,
+      source: 'db',
+      pendingSync: true,
+      sourceUrl: sourceUrl || null
+    };
+
     setOfflineCache(prev => ({
       ...prev,
-      [localId]: { id: localId, title: cleanTitle, stanzas: cleanStanzas, source: 'db', pendingSync: true }
+      [localId]: localEntry
     }));
+
+    upsertOfflineSongSqlite(localEntry);
 
     enqueueSongForSync({
       title: cleanTitle,
@@ -763,11 +902,25 @@ function App() {
     });
 
     return localId;
-  }, [enqueueSongForSync]);
+  }, [enqueueSongForSync, upsertOfflineSongSqlite]);
 
-  const shouldStoreLargeDataInLocalStorage = !Capacitor.isNativePlatform() || !nativeFileStorageEnabled;
+  const shouldStoreLargeDataInLocalStorage = !sqliteEnabled && (!Capacitor.isNativePlatform() || !nativeFileStorageEnabled);
 
   useEffect(() => {
+    if (sqliteEnabled) {
+      try {
+        localStorage.removeItem('worship_offline_cache');
+        localStorage.removeItem(OFFLINE_CACHE_CHUNK_META);
+        for (let i = 0; i < 9999; i += 1) {
+          const key = `${OFFLINE_CACHE_CHUNK_PREFIX}${i}`;
+          if (!localStorage.getItem(key)) break;
+          localStorage.removeItem(key);
+        }
+      } catch {
+        // no-op
+      }
+      return;
+    }
     if (!Capacitor.isNativePlatform() || !nativeFileStorageEnabled) return;
 
     // Quota-safety migration: remove heavy payloads from localStorage once device-file mode is active.
@@ -804,9 +957,11 @@ function App() {
       offlineBytes,
       queueBytes,
       totalBytes,
-      target: shouldStoreLargeDataInLocalStorage ? 'LocalStorage' : 'Device Files (Directory.Data)'
+      target: sqliteEnabled
+        ? 'SQLite (App Data)'
+        : (shouldStoreLargeDataInLocalStorage ? 'LocalStorage' : 'Device Files (Directory.Data)')
     };
-  }, [offlineCache, pendingSyncQueue, shouldStoreLargeDataInLocalStorage]);
+  }, [offlineCache, pendingSyncQueue, shouldStoreLargeDataInLocalStorage, sqliteEnabled]);
 
   // Persist settings
   useEffect(() => { writeLocalStorage('activeTab', activeTab, 'active tab'); }, [activeTab, writeLocalStorage]);
@@ -821,20 +976,44 @@ function App() {
   useEffect(() => { writeLocalStorage('worship_favorites', JSON.stringify(favorites), 'favorites'); }, [favorites, writeLocalStorage]);
   useEffect(() => { writeLocalStorage('worship_recent_songs', JSON.stringify(recentSongs), 'recent songs'); }, [recentSongs, writeLocalStorage]);
   useEffect(() => {
+    if (sqliteEnabled) {
+      writeLocalStorage('worship_offline_cache', JSON.stringify({ _storedInSqlite: true, count: Object.keys(offlineCache || {}).length }), 'offline cache marker');
+      return;
+    }
     if (shouldStoreLargeDataInLocalStorage) {
-      writeLocalStorage('worship_offline_cache', JSON.stringify(offlineCache), 'offline cache');
+      const entries = Object.entries(offlineCache || {});
+      const chunkCount = Math.max(1, Math.ceil(entries.length / OFFLINE_CACHE_CHUNK_SIZE));
+      const existingMeta = readJsonLocalStorageSafely(OFFLINE_CACHE_CHUNK_META, null, { maxChars: 2000 });
+      const existingCount = Number(existingMeta?.count || 0);
+
+      for (let i = 0; i < chunkCount; i += 1) {
+        const slice = entries.slice(i * OFFLINE_CACHE_CHUNK_SIZE, (i + 1) * OFFLINE_CACHE_CHUNK_SIZE);
+        const chunk = Object.fromEntries(slice);
+        writeLocalStorage(`${OFFLINE_CACHE_CHUNK_PREFIX}${i}`, JSON.stringify(chunk), 'offline cache chunk');
+      }
+
+      for (let i = chunkCount; i < existingCount; i += 1) {
+        try { localStorage.removeItem(`${OFFLINE_CACHE_CHUNK_PREFIX}${i}`); } catch { /* no-op */ }
+      }
+
+      writeLocalStorage(OFFLINE_CACHE_CHUNK_META, JSON.stringify({ count: chunkCount }), 'offline cache meta');
+      writeLocalStorage('worship_offline_cache', JSON.stringify({ _storedInChunks: true, count: entries.length }), 'offline cache marker');
       return;
     }
     // Keep a lightweight marker in localStorage while data lives in device files.
     writeLocalStorage('worship_offline_cache', JSON.stringify({ _storedInDeviceFile: true, count: Object.keys(offlineCache || {}).length }), 'offline cache marker');
-  }, [offlineCache, shouldStoreLargeDataInLocalStorage, writeLocalStorage]);
+  }, [offlineCache, shouldStoreLargeDataInLocalStorage, writeLocalStorage, sqliteEnabled]);
   useEffect(() => {
+    if (sqliteEnabled) {
+      writeLocalStorage('worship_pending_sync_queue', JSON.stringify({ _storedInSqlite: true, count: pendingSyncQueue.length }), 'pending queue marker');
+      return;
+    }
     if (shouldStoreLargeDataInLocalStorage) {
       writeLocalStorage('worship_pending_sync_queue', JSON.stringify(pendingSyncQueue), 'pending sync queue');
       return;
     }
     writeLocalStorage('worship_pending_sync_queue', JSON.stringify({ _storedInDeviceFile: true, count: pendingSyncQueue.length }), 'pending queue marker');
-  }, [pendingSyncQueue, shouldStoreLargeDataInLocalStorage, writeLocalStorage]);
+  }, [pendingSyncQueue, shouldStoreLargeDataInLocalStorage, writeLocalStorage, sqliteEnabled]);
   useEffect(() => { writeLocalStorage('displayFont', displayFont, 'display font'); }, [displayFont, writeLocalStorage]);
   useEffect(() => { writeLocalStorage('displayFontSize', String(displayFontSize), 'display font size'); }, [displayFontSize, writeLocalStorage]);
   useEffect(() => { writeLocalStorage('displayImageSize', String(displayImageSize), 'display image size'); }, [displayImageSize, writeLocalStorage]);
@@ -862,17 +1041,17 @@ function App() {
       userName: userName || '',
       serverHost: cleanedServerHost,
       serverPort: cleanedServerPort,
-      storageMode: shouldStoreLargeDataInLocalStorage ? 'local-storage' : 'device-files'
+      storageMode: sqliteEnabled ? 'sqlite' : (shouldStoreLargeDataInLocalStorage ? 'local-storage' : 'device-files')
     };
 
     // In native device-file mode, avoid writing snapshots to localStorage entirely.
     // This prevents quota issues when users migrate from older builds.
-    if (shouldStoreLargeDataInLocalStorage) {
+    if (!sqliteEnabled && shouldStoreLargeDataInLocalStorage) {
       writeLocalStorage(LOCAL_DATA_SNAPSHOT_KEY, JSON.stringify(snapshot), 'local snapshot');
     }
 
     setLocalSnapshotSavedAt(snapshot.savedAt);
-  }, [favorites, recentSongs, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort, shouldStoreLargeDataInLocalStorage, writeLocalStorage]);
+  }, [favorites, recentSongs, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort, shouldStoreLargeDataInLocalStorage, writeLocalStorage, sqliteEnabled]);
 
   useEffect(() => {
     if (!nativeFileStorageEnabled) return;
@@ -911,6 +1090,7 @@ function App() {
         const syncedSongId = res?.data?.songId;
 
         if (item.localId && syncedSongId && item.localId !== syncedSongId) {
+          const existingEntry = offlineCacheRef.current[item.localId];
           setOfflineCache(prev => {
             const localEntry = prev[item.localId];
             if (!localEntry) return prev;
@@ -919,6 +1099,15 @@ function App() {
             next[syncedSongId] = { ...localEntry, id: syncedSongId, pendingSync: false };
             return next;
           });
+
+          if (existingEntry) {
+            upsertOfflineSongSqlite({
+              ...existingEntry,
+              id: syncedSongId,
+              pendingSync: false
+            });
+          }
+          deleteOfflineSongSqlite(item.localId);
 
           setFavorites(prev => prev.map(f => (
             f.id === item.localId ? { ...f, id: syncedSongId, source: 'db' } : f
@@ -930,6 +1119,7 @@ function App() {
               : prev
           ));
         } else if (item.localId) {
+          const existingEntry = offlineCacheRef.current[item.localId];
           setOfflineCache(prev => {
             if (!prev[item.localId]) return prev;
             return {
@@ -937,6 +1127,12 @@ function App() {
               [item.localId]: { ...prev[item.localId], pendingSync: false }
             };
           });
+          if (existingEntry) {
+            upsertOfflineSongSqlite({
+              ...existingEntry,
+              pendingSync: false
+            });
+          }
         }
       } catch (err) {
         if (!firstError) {
@@ -949,7 +1145,7 @@ function App() {
     setPendingSyncQueue(remaining);
     setSyncState({ syncing: false, lastRun: Date.now(), lastError: firstError });
     syncInProgressRef.current = false;
-  }, [apiBase]);
+  }, [apiBase, upsertOfflineSongSqlite, deleteOfflineSongSqlite]);
 
   const downloadAllSongsForOffline = useCallback(async () => {
     const confirmed = window.confirm('Do you want to download all songs to local app files for offline access?');
@@ -1015,13 +1211,14 @@ function App() {
       }
 
       setOfflineCache(merged);
+      await bulkUpsertOfflineSongsSqlite(Object.values(merged));
       setOfflineDownloadState({ downloading: false, downloaded: totalDownloaded, total: totalDownloaded, lastError: '' });
       alert(`Downloaded ${totalDownloaded} songs for offline access.`);
     } catch (err) {
       setOfflineDownloadState(prev => ({ ...prev, downloading: false, lastError: err.message || 'Failed to download songs' }));
       alert('Offline download failed: ' + (err.message || 'Unknown error'));
     }
-  }, [ensureStoragePermission]);
+  }, [ensureStoragePermission, bulkUpsertOfflineSongsSqlite]);
 
   const probeHealth = useCallback(async (candidateHost) => {
     try {
@@ -1491,17 +1688,23 @@ function App() {
 
     CapacitorApp.addListener('backButton', ({ canGoBack }) => {
         if (handleInternalBack()) return;
-        // If not in modal/song/settings, always return to home instead of exiting app
+
         if (!showHomeCards) {
           setShowHomeCards(true);
           setResults([]);
           setSelectedLetter(null);
           return;
         }
+
+        const now = Date.now();
+        if (now - lastBackPressRef.current < 2000) {
+          CapacitorApp.exitApp();
+          return;
+        }
+
+        lastBackPressRef.current = now;
         if (canGoBack) {
           window.history.back();
-        } else {
-          CapacitorApp.minimizeApp();
         }
     }).then(h => { removeBackButtonListener = h; }).catch(() => {});
 
@@ -1666,7 +1869,9 @@ function App() {
           if (error) throw error;
           stanzasData = data.map(item => item.lyrics);
           // Cache it
-          setOfflineCache(prev => ({ ...prev, [songMetadata.id]: { id: songMetadata.id, title: songMetadata.title, stanzas: stanzasData, source: 'db' } }));
+          const cacheEntry = { id: songMetadata.id, title: songMetadata.title, stanzas: stanzasData, source: 'db' };
+          setOfflineCache(prev => ({ ...prev, [songMetadata.id]: cacheEntry }));
+          upsertOfflineSongSqlite(cacheEntry);
         }
         setSelectedSong({ id: songMetadata.id, title: songMetadata.title, stanzas: stanzasData, isCached: true });
       } else {
@@ -1740,10 +1945,12 @@ function App() {
       }));
 
       if (persistedId) {
+        const cacheEntry = { id: persistedId, title: cleanTitle, stanzas: cleanStanzas, source: 'db' };
         setOfflineCache(prev => ({
           ...prev,
-          [persistedId]: { id: persistedId, title: cleanTitle, stanzas: cleanStanzas, source: 'db' }
+          [persistedId]: cacheEntry
         }));
+        upsertOfflineSongSqlite(cacheEntry);
       }
 
       setIsEditingSong(false);
@@ -1788,7 +1995,9 @@ function App() {
 
       const newId = saveRes.data.songId;
       if (newId) {
-        setOfflineCache(prev => ({ ...prev, [newId]: { id: newId, title: songItem.title, stanzas, source: 'db' } }));
+        const cacheEntry = { id: newId, title: songItem.title, stanzas, source: 'db' };
+        setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
+        upsertOfflineSongSqlite(cacheEntry);
       }
       alert(`Saved "${songItem.title}" to DB.`);
     } catch (err) {
@@ -1871,7 +2080,9 @@ function App() {
         const res = await axios.post(`${apiBase}/save_song`, { title: selectedSong.title, stanzas: selectedSong.stanzas });
         const newId = res.data.songId;
         setSelectedSong(prev => ({ ...prev, isCached: true, id: newId }));
-        setOfflineCache(prev => ({ ...prev, [newId]: { id: newId, title: selectedSong.title, stanzas: selectedSong.stanzas, source: 'db' } }));
+        const cacheEntry = { id: newId, title: selectedSong.title, stanzas: selectedSong.stanzas, source: 'db' };
+        setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
+        upsertOfflineSongSqlite(cacheEntry);
       } catch { /* silent */ }
     }
   };
@@ -2499,7 +2710,9 @@ function App() {
       const res = await axios.post(`${apiBase}/save_song`, { title: addTitle.trim(), stanzas });
       const newId = res.data.songId;
       // Cache locally too
-      setOfflineCache(prev => ({ ...prev, [newId]: { id: newId, title: addTitle.trim(), stanzas, source: 'db' } }));
+      const cacheEntry = { id: newId, title: addTitle.trim(), stanzas, source: 'db' };
+      setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
+      upsertOfflineSongSqlite(cacheEntry);
       setShowAddModal(false);
       alert(`✅ "${addTitle.trim()}" saved with ${stanzas.length} stanza(s)!`);
     } catch {
