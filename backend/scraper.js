@@ -36,6 +36,77 @@ function buildQueryTokens(query) {
         .filter(t => t.length > 1);
 }
 
+function normalizeSearchText(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function levenshteinDistance(left, right) {
+    const a = normalizeSearchText(left);
+    const b = normalizeSearchText(right);
+    if (!a) return b.length;
+    if (!b) return a.length;
+    if (a === b) return 0;
+
+    const aLen = a.length;
+    const bLen = b.length;
+    const prev = new Array(bLen + 1).fill(0);
+    const curr = new Array(bLen + 1).fill(0);
+
+    for (let j = 0; j <= bLen; j += 1) prev[j] = j;
+
+    for (let i = 1; i <= aLen; i += 1) {
+        curr[0] = i;
+        const aChar = a.charAt(i - 1);
+        for (let j = 1; j <= bLen; j += 1) {
+            const cost = aChar === b.charAt(j - 1) ? 0 : 1;
+            curr[j] = Math.min(
+                prev[j] + 1,
+                curr[j - 1] + 1,
+                prev[j - 1] + cost
+            );
+        }
+        for (let j = 0; j <= bLen; j += 1) prev[j] = curr[j];
+    }
+
+    return prev[bLen];
+}
+
+function similarityPercent(left, right) {
+    const a = normalizeSearchText(left);
+    const b = normalizeSearchText(right);
+    if (!a && !b) return 0;
+    if (a === b) return 100;
+    const distance = levenshteinDistance(a, b);
+    const maxLen = Math.max(a.length, b.length) || 1;
+    return Math.max(0, Math.round((1 - distance / maxLen) * 100));
+}
+
+function applySimilarityThresholds(items, query) {
+    const normalizedQuery = normalizeSearchText(query);
+    if (!normalizedQuery) return items;
+
+    const scored = items.map(item => {
+        const score = similarityPercent(item.title, normalizedQuery);
+        return { ...item, _similarity: score };
+    });
+
+    const thresholds = [100, 90, 80, 70, 60, 50];
+    for (const threshold of thresholds) {
+        const matches = scored.filter(item => item._similarity >= threshold);
+        if (matches.length > 0) {
+            return matches
+                .sort((a, b) => b._similarity - a._similarity || a.title.localeCompare(b.title))
+                .map(({ _similarity, ...rest }) => rest);
+        }
+    }
+
+    return [];
+}
+
 function matchesQuery(title, queryTokens) {
     if (queryTokens.length === 0) return true;
     const titleLower = String(title || '').toLowerCase();
@@ -307,11 +378,21 @@ async function searchSongs(query) {
 
         // Deduplicate by URL
         const seen = new Set();
-        return results.filter(r => {
+        const deduped = results.filter(r => {
             if (seen.has(r.url)) return false;
             seen.add(r.url);
             return r.title && r.url;
-        }).slice(0, 50);
+        });
+
+        const thresholded = applySimilarityThresholds(deduped, query);
+        if (thresholded.length === 0) return [];
+
+        const tokens = buildQueryTokens(query);
+        return thresholded
+            .map(item => ({ ...item, _score: scoreResult(item, tokens) }))
+            .sort((a, b) => b._score - a._score || a.title.localeCompare(b.title))
+            .map(({ _score, ...rest }) => rest)
+            .slice(0, 50);
     } catch (error) {
         console.error('[scraper] Web search failed:', error.message);
         return [];

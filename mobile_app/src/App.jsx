@@ -94,24 +94,75 @@ const loadTabSearchState = () => {
   }
 };
 
-const rankByRelatedness = (items, query) => {
-  const tokens = String(query || '').toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
-  if (tokens.length === 0) return items;
+const normalizeSearchText = (value) => {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
 
-  return [...items]
-    .map(item => {
-      const title = String(item.title || '').toLowerCase();
-      let score = 0;
-      for (const token of tokens) {
-        if (title === token) score += 8;
-        else if (title.startsWith(token)) score += 5;
-        else if (title.includes(token)) score += 2;
-      }
-      if (title.includes(tokens.join(' '))) score += 4;
-      return { ...item, _score: score };
-    })
-    .sort((a, b) => b._score - a._score || a.title.localeCompare(b.title))
-    .map(({ _score, ...rest }) => rest);
+const levenshteinDistance = (left, right) => {
+  const a = normalizeSearchText(left);
+  const b = normalizeSearchText(right);
+  if (!a) return b.length;
+  if (!b) return a.length;
+  if (a === b) return 0;
+
+  const aLen = a.length;
+  const bLen = b.length;
+  const prev = new Array(bLen + 1).fill(0);
+  const curr = new Array(bLen + 1).fill(0);
+
+  for (let j = 0; j <= bLen; j += 1) prev[j] = j;
+
+  for (let i = 1; i <= aLen; i += 1) {
+    curr[0] = i;
+    const aChar = a.charAt(i - 1);
+    for (let j = 1; j <= bLen; j += 1) {
+      const cost = aChar === b.charAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      );
+    }
+    for (let j = 0; j <= bLen; j += 1) prev[j] = curr[j];
+  }
+
+  return prev[bLen];
+};
+
+const similarityPercent = (left, right) => {
+  const a = normalizeSearchText(left);
+  const b = normalizeSearchText(right);
+  if (!a && !b) return 0;
+  if (a === b) return 100;
+  const distance = levenshteinDistance(a, b);
+  const maxLen = Math.max(a.length, b.length) || 1;
+  return Math.max(0, Math.round((1 - distance / maxLen) * 100));
+};
+
+const rankByRelatedness = (items, query) => {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return items;
+
+  const scored = [...items].map(item => {
+    const score = similarityPercent(item.title, normalizedQuery);
+    return { ...item, _similarity: score };
+  });
+
+  const thresholds = [100, 90, 80, 70, 60, 50];
+  for (const threshold of thresholds) {
+    const matches = scored.filter(item => item._similarity >= threshold);
+    if (matches.length > 0) {
+      return matches
+        .sort((a, b) => b._similarity - a._similarity || a.title.localeCompare(b.title))
+        .map(({ _similarity, ...rest }) => rest);
+    }
+  }
+
+  return [];
 };
 
 const extractFirstIpv4 = (value) => {
