@@ -277,7 +277,7 @@ async function searchWeb(query) {
     const fullQuery = `${query} tamil christian song lyrics`;
     const { data } = await axios.get(DDG_SEARCH_URL, {
         headers: HEADERS,
-        timeout: 15000,
+        timeout: 12000,
         params: { q: fullQuery, kl: 'in-en' }
     });
 
@@ -402,6 +402,7 @@ async function searchTamilChristianSongs(query) {
         const fullUrl = absoluteUrl(TCS_BASE_URL, href);
 
         if (!title || !fullUrl) return;
+        if (!/\/lyrics\//i.test(fullUrl)) return;
         title = cleanTitle(title);
         if (!passesQuery(title, queryTokens, query)) return;
         if (results.some(r => r.url === fullUrl)) return;
@@ -425,12 +426,26 @@ async function searchTamilChristianSongs(query) {
 async function searchSongs(query) {
     try {
         console.log(`[scraper] Searching web for: ${query}`);
-        const webResults = await searchWeb(query);
+        let webResults = [];
+        try {
+            webResults = await searchWeb(query);
+        } catch (err) {
+            console.warn(`[scraper] DuckDuckGo search failed: ${err.message}`);
+        }
 
         const [christsquareResults, csbResults, tcsResults] = await Promise.all([
-            searchChristSquare(query),
-            searchChristianSongBook(query),
-            searchTamilChristianSongs(query)
+            searchChristSquare(query).catch(err => {
+                console.warn(`[scraper] ChristSquare search failed: ${err.message}`);
+                return [];
+            }),
+            searchChristianSongBook(query).catch(err => {
+                console.warn(`[scraper] ChristianSongBook search failed: ${err.message}`);
+                return [];
+            }),
+            searchTamilChristianSongs(query).catch(err => {
+                console.warn(`[scraper] TamilChristianSongs search failed: ${err.message}`);
+                return [];
+            })
         ]);
         const results = [...webResults, ...christsquareResults, ...csbResults, ...tcsResults];
 

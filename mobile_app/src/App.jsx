@@ -181,7 +181,14 @@ const rankByRelatedness = (items, query) => {
     }
   }
 
-  return [];
+  return scored
+    .sort((a, b) => (
+      b._similarity - a._similarity ||
+      matchRank(b.title, normalizedQuery) - matchRank(a.title, normalizedQuery) ||
+      a.title.length - b.title.length ||
+      a.title.localeCompare(b.title)
+    ))
+    .map(({ _similarity, ...rest }) => rest);
 };
 
 const extractFirstIpv4 = (value) => {
