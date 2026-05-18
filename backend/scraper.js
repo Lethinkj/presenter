@@ -3,6 +3,7 @@ const cheerio = require('cheerio');
 
 const BASE_URL = 'https://www.christsquare.com';
 const CSB_BASE_URL = 'https://christiansongbook.org';
+const TCS_BASE_URL = 'https://tamilchristiansongs.in';
 const DDG_SEARCH_URL = 'https://duckduckgo.com/html/';
 const HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
 
@@ -123,6 +124,20 @@ function applySimilarityThresholds(items, query) {
     }
 
     return [];
+}
+
+function passesQuery(title, queryTokens, query) {
+    const normalizedTitle = normalizeSearchText(title);
+    const normalizedQuery = normalizeSearchText(query);
+    if (!normalizedQuery) return true;
+    if (!normalizedTitle) return false;
+
+    if (normalizedTitle === normalizedQuery) return true;
+    if (normalizedTitle.startsWith(normalizedQuery)) return true;
+    if (normalizedQuery.length >= 2 && normalizedTitle.includes(normalizedQuery)) return true;
+    if (queryTokens.some(token => normalizedTitle.includes(token))) return true;
+
+    return similarityPercent(normalizedTitle, normalizedQuery) >= 50;
 }
 
 function matchesQuery(title, queryTokens) {
@@ -276,7 +291,7 @@ async function searchWeb(query) {
         const url = normalizeResultUrl(href);
         if (!title || !url) return;
         if (!looksLikeLyricsPage(url, title)) return;
-        if (!matchesQuery(title, queryTokens)) return;
+        if (!passesQuery(title, queryTokens, query)) return;
         if (raw.some(r => r.url === url)) return;
 
         raw.push({
@@ -305,7 +320,7 @@ async function searchChristSquare(query) {
         const fullUrl = absoluteUrl(BASE_URL, href);
         const isIndexPage = fullUrl === `${BASE_URL}/tamil-christian-songs/` || fullUrl === `${BASE_URL}/tamil-christian-songs`;
 
-        if (title && fullUrl && !isIndexPage && matchesQuery(title, queryTokens) && !results.some(r => r.url === fullUrl)) {
+        if (title && fullUrl && !isIndexPage && passesQuery(title, queryTokens, query) && !results.some(r => r.url === fullUrl)) {
             results.push({
                 id: makeId('web-cs', i),
                 title: cleanTitle(title),
@@ -355,7 +370,7 @@ async function searchChristianSongBook(query) {
                 if (!isSongLink || !title || title.length < 2) return;
 
                 title = cleanTitle(title);
-                if (!matchesQuery(title, queryTokens)) return;
+                if (!passesQuery(title, queryTokens, query)) return;
 
                 if (!merged.some(r => r.url === fullUrl)) {
                     merged.push({
@@ -374,6 +389,34 @@ async function searchChristianSongBook(query) {
     return merged.slice(0, 60);
 }
 
+async function searchTamilChristianSongs(query) {
+    const searchUrl = `${TCS_BASE_URL}/?s=${encodeURIComponent(query)}`;
+    const { data } = await axios.get(searchUrl, { headers: HEADERS, timeout: 12000 });
+    const $ = cheerio.load(data);
+    const results = [];
+    const queryTokens = buildQueryTokens(query);
+
+    $('.entry-title a, article h2 a, article h3 a, .search-results a[href]').each((i, el) => {
+        const href = $(el).attr('href');
+        let title = $(el).text().trim();
+        const fullUrl = absoluteUrl(TCS_BASE_URL, href);
+
+        if (!title || !fullUrl) return;
+        title = cleanTitle(title);
+        if (!passesQuery(title, queryTokens, query)) return;
+        if (results.some(r => r.url === fullUrl)) return;
+
+        results.push({
+            id: makeId('web-tcs', i),
+            title,
+            url: fullUrl,
+            site: 'tamilchristiansongs'
+        });
+    });
+
+    return results.slice(0, 60);
+}
+
 /**
  * Search for songs on christsquare.com
  * @param {string} query
@@ -384,15 +427,12 @@ async function searchSongs(query) {
         console.log(`[scraper] Searching web for: ${query}`);
         const webResults = await searchWeb(query);
 
-        let results = webResults;
-        // If generic web search is sparse, enrich with known source search.
-        if (results.length < 8) {
-            const [christsquareResults, csbResults] = await Promise.all([
-                searchChristSquare(query),
-                searchChristianSongBook(query)
-            ]);
-            results = [...results, ...christsquareResults, ...csbResults];
-        }
+        const [christsquareResults, csbResults, tcsResults] = await Promise.all([
+            searchChristSquare(query),
+            searchChristianSongBook(query),
+            searchTamilChristianSongs(query)
+        ]);
+        const results = [...webResults, ...christsquareResults, ...csbResults, ...tcsResults];
 
         // Deduplicate by URL
         const seen = new Set();
