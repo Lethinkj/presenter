@@ -140,7 +140,21 @@ const similarityPercent = (left, right) => {
   if (a === b) return 100;
   const distance = levenshteinDistance(a, b);
   const maxLen = Math.max(a.length, b.length) || 1;
-  return Math.max(0, Math.round((1 - distance / maxLen) * 100));
+  const base = Math.max(0, Math.round((1 - distance / maxLen) * 100));
+
+  if (b.length >= 2 && a.startsWith(b)) return Math.max(90, base);
+  if (b.length >= 3 && a.includes(b)) return Math.max(70, base);
+  return base;
+};
+
+const matchRank = (title, query) => {
+  const a = normalizeSearchText(title);
+  const b = normalizeSearchText(query);
+  if (!a || !b) return 0;
+  if (a === b) return 3;
+  if (a.startsWith(b)) return 2;
+  if (a.includes(b)) return 1;
+  return 0;
 };
 
 const rankByRelatedness = (items, query) => {
@@ -157,7 +171,12 @@ const rankByRelatedness = (items, query) => {
     const matches = scored.filter(item => item._similarity >= threshold);
     if (matches.length > 0) {
       return matches
-        .sort((a, b) => b._similarity - a._similarity || a.title.localeCompare(b.title))
+        .sort((a, b) => (
+          b._similarity - a._similarity ||
+          matchRank(b.title, normalizedQuery) - matchRank(a.title, normalizedQuery) ||
+          a.title.length - b.title.length ||
+          a.title.localeCompare(b.title)
+        ))
         .map(({ _similarity, ...rest }) => rest);
     }
   }
