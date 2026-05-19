@@ -11,6 +11,14 @@ const { startDailyScheduler } = require('./daily_heartbeat');
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+const normalizeRoomCode = (value) => {
+    const normalized = String(value || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9_-]/g, '')
+        .slice(0, 24);
+    return normalized || 'DEFAULT';
+};
 
 app.use(cors());
 app.use(express.json());
@@ -22,15 +30,13 @@ app.get('/health', (req, res) => {
 
 // Short offline-present route for easy browser typing on hotspot/LAN.
 app.get('/t/:room', (req, res) => {
-    const rawRoom = String(req.params.room || 'default').trim().toUpperCase();
-    const safeRoom = encodeURIComponent(rawRoom.slice(0, 24) || 'DEFAULT');
+    const safeRoom = encodeURIComponent(normalizeRoomCode(req.params.room));
     res.redirect(`/tv.html?room=${safeRoom}`);
 });
 
 // Short online-present route for easy sharing.
 app.get('/room/:room', (req, res) => {
-    const rawRoom = String(req.params.room || 'default').trim().toUpperCase();
-    const safeRoom = encodeURIComponent(rawRoom.slice(0, 24) || 'DEFAULT');
+    const safeRoom = encodeURIComponent(normalizeRoomCode(req.params.room));
     res.redirect(`/tv.html?room=${safeRoom}`);
 });
 
@@ -295,11 +301,12 @@ wss.on('connection', (ws) => {
 
     ws.on('message', (messageAsString) => {
         try {
+            ws.isAlive = true;
             const message = JSON.parse(messageAsString);
             console.log('Received message:', message);
 
             if (message.type === 'join') {
-                const room = message.room || 'default';
+                const room = normalizeRoomCode(message.room);
                 const name = (message.name || 'Anonymous').toString().slice(0, 60);
                 const deviceCode = (message.deviceCode || 'Unknown').toString().slice(0, 60);
                 clients.set(ws, { room, name, deviceCode });
@@ -312,7 +319,7 @@ wss.on('connection', (ws) => {
             // Broadcast presentation messages to all connected clients in the SAME room
             else if (message.type === 'present' || message.type === 'present-image' || message.type === 'clear') {
                 const senderData = clients.get(ws);
-                const targetRoom = senderData ? senderData.room : null;
+                const targetRoom = senderData ? normalizeRoomCode(senderData.room) : null;
 
                 if (!targetRoom) {
                     ws.send(JSON.stringify({ type: 'error', message: 'You must join a room first' }));
@@ -353,7 +360,7 @@ wss.on('close', () => {
     clearInterval(wsHeartbeat);
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 8901;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`WorshipCast Presentation Server running on port ${PORT}`);
     startDailyScheduler().catch((err) => {

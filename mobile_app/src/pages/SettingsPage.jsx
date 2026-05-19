@@ -65,7 +65,12 @@ export default function SettingsPage({
           <h3 style={{ margin: 0 }}>TV Room</h3>
           <div className="room-control settings-room-control">
             <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Room Code:</label>
-            <input type="text" className="room-input" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} />
+            <input
+              type="text"
+              className="room-input"
+              value={roomCode}
+              onChange={e => setRoomCode(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24))}
+            />
             <button className={`share-btn ${copiedLink ? 'copied' : ''}`} onClick={handleShareLink} title="Copy TV Link">
               <FaShareAlt /> {copiedLink ? '✓' : ''}
             </button>
@@ -131,7 +136,7 @@ export default function SettingsPage({
           />
           <input
             className="modal-input"
-            placeholder="Port (default 3000)"
+            placeholder="Port (default 8901)"
             value={serverPort}
             onChange={e => setServerPort(e.target.value.replace(/[^0-9]/g, ''))}
           />

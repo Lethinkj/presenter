@@ -16,6 +16,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 const OfflinePresenter = registerPlugin('OfflinePresenter');
+const DEFAULT_SERVER_PORT = '8901';
 
 // Use Production URLs if provided via .env, otherwise fallback to local dev network
 const PROD_URL = import.meta.env.VITE_API_URL; 
@@ -36,8 +37,17 @@ const normalizeWsUrl = (url) => {
   return url;
 };
 
+const normalizeRoomCode = (value, fallback = 'DEFAULT') => {
+  const normalized = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, '')
+    .slice(0, 24);
+  return normalized || fallback;
+};
+
 const buildRoomScopedWsUrl = (baseWsUrl, room) => {
-  const safeRoom = String(room || 'DEFAULT').trim() || 'DEFAULT';
+  const safeRoom = normalizeRoomCode(room);
 
   try {
     const parsed = new URL(baseWsUrl);
@@ -51,9 +61,9 @@ const buildRoomScopedWsUrl = (baseWsUrl, room) => {
   }
 };
 
-export const API_BASE = API_BASE_NORMALIZED || (SERVER_IP ? `http://${SERVER_IP}:3000` : 'http://localhost:3000');
+export const API_BASE = API_BASE_NORMALIZED || (SERVER_IP ? `http://${SERVER_IP}:${DEFAULT_SERVER_PORT}` : `http://localhost:${DEFAULT_SERVER_PORT}`);
 export const WS_URL = normalizeWsUrl(
-  PROD_WS || (API_BASE_NORMALIZED ? API_BASE_NORMALIZED.replace(/^http/, 'ws') : (SERVER_IP ? `ws://${SERVER_IP}:3000` : 'ws://localhost:3000'))
+  PROD_WS || (API_BASE_NORMALIZED ? API_BASE_NORMALIZED.replace(/^http/, 'ws') : (SERVER_IP ? `ws://${SERVER_IP}:${DEFAULT_SERVER_PORT}` : `ws://localhost:${DEFAULT_SERVER_PORT}`))
 );
 
 const FONTS = [
@@ -245,9 +255,10 @@ const normalizeHostInput = (value) => {
 
 const formatOfflineLink = (host, port, roomCode, includeProtocol = true) => {
   if (!host) return '';
-  const safePort = String(port || '3000');
+  const safePort = String(port || DEFAULT_SERVER_PORT);
   const portPart = safePort === '80' ? '' : `:${safePort}`;
-  return `${includeProtocol ? 'http://' : ''}${host}${portPart}`;
+  const safeRoom = encodeURIComponent(normalizeRoomCode(roomCode));
+  return `${includeProtocol ? 'http://' : ''}${host}${portPart}/t/${safeRoom}`;
 };
 
 const isPrivateIpv4 = (ip) => {
@@ -533,8 +544,8 @@ function App() {
   // Room
   const [roomCode, setRoomCode] = useState(() => {
     const saved = localStorage.getItem('tvRoomCode');
-    if (saved) return saved;
-    return deviceCode.slice(-6).padStart(6, '0').toUpperCase();
+    if (saved) return normalizeRoomCode(saved);
+    return normalizeRoomCode(deviceCode.slice(-6).padStart(6, '0'));
   });
 
   const [copiedLink, setCopiedLink] = useState(false);
@@ -619,34 +630,46 @@ function App() {
   const [offlineServerStatus, setOfflineServerStatus] = useState({ checking: false, ok: null, message: '' });
   const [autoDetectingLan, setAutoDetectingLan] = useState(false);
   const [startingOfflinePresent, setStartingOfflinePresent] = useState(false);
-  const [nativeOfflineServer, setNativeOfflineServer] = useState({ running: false, host: '', port: 3000, url: '' });
+  const [nativeOfflineServer, setNativeOfflineServer] = useState({ running: false, host: '', port: Number(DEFAULT_SERVER_PORT), url: '' });
   const [useLanApi, setUseLanApi] = useState(() => localStorage.getItem('presenterUseLanApi') === 'true');
   const [presentRoutingMode, setPresentRoutingMode] = useState(() => normalizePresentRoutingMode(localStorage.getItem('presenterRoutingMode')));
 
   // Connection config for LAN/hotspot use.
-  const [serverHost, setServerHost] = useState(() => localStorage.getItem('presenterServerHost') || '10.224.62.152');
+  const [serverHost, setServerHost] = useState(() => {
+    const storedHost = normalizeHostInput(localStorage.getItem('presenterServerHost'));
+    if (storedHost) return storedHost;
+    if (SERVER_IP && isShareableOfflineHost(SERVER_IP)) return SERVER_IP;
+    return '';
+  });
   const [serverPort, setServerPort] = useState(() => {
     const storedPort = localStorage.getItem('presenterServerPort');
-    const storedHost = localStorage.getItem('presenterServerHost');
-    const normalizedHost = normalizeHostInput(storedHost);
+    const normalizedHost = normalizeHostInput(localStorage.getItem('presenterServerHost'));
 
     if (storedPort && storedPort !== '3000') return storedPort;
-    if (normalizedHost && isShareableOfflineHost(normalizedHost)) return '8901';
-    return storedPort || '8901';
+    if (storedPort === '3000') return DEFAULT_SERVER_PORT;
+    if (normalizedHost && isShareableOfflineHost(normalizedHost)) return DEFAULT_SERVER_PORT;
+    return storedPort || DEFAULT_SERVER_PORT;
   });
+
+  useEffect(() => {
+    const normalizedRoom = normalizeRoomCode(roomCode);
+    if (normalizedRoom !== roomCode) {
+      setRoomCode(normalizedRoom);
+    }
+  }, [roomCode]);
 
   useEffect(() => {
     const normalizedHost = normalizeHostInput(serverHost);
     if (!normalizedHost || !isShareableOfflineHost(normalizedHost)) return;
     if (!serverPort || serverPort === '3000') {
-      setServerPort('8901');
+      setServerPort(DEFAULT_SERVER_PORT);
     }
   }, [serverHost, serverPort]);
 
   const cleanedServerHost = useMemo(() => normalizeHostInput(serverHost), [serverHost]);
   const cleanedServerPort = useMemo(() => {
     const parsed = Number(serverPort);
-    if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) return '3000';
+    if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) return DEFAULT_SERVER_PORT;
     return String(parsed);
   }, [serverPort]);
 
@@ -682,7 +705,7 @@ function App() {
     [detectedLanHost, cleanedServerPort, roomCode]
   );
   const onlineTvUrl = useMemo(
-    () => `${apiBase}/room/${encodeURIComponent(roomCode)}`,
+    () => `${apiBase}/room/${encodeURIComponent(normalizeRoomCode(roomCode))}`,
     [apiBase, roomCode]
   );
 
@@ -1552,7 +1575,7 @@ function App() {
       try {
         const started = await OfflinePresenter.startServer({
           port: Number(cleanedServerPort),
-          room: roomCode
+          room: normalizeRoomCode(roomCode)
         });
         const host = String(started?.host || '');
         const url = String(started?.url || '');
@@ -1802,7 +1825,7 @@ function App() {
       wsRef.current = null;
       setWs(null);
     };
-  }, []);
+  }, [effectiveWsBase]);
 
   const restoreViewFromSettings = useCallback(() => {
     const snapshot = settingsReturnRef.current;
@@ -2858,7 +2881,7 @@ function App() {
 
   // ---- Share Link ----
   const handleShareLink = () => {
-    const tvUrl = `${apiBase}/room/${roomCode}`;
+    const tvUrl = `${apiBase}/room/${encodeURIComponent(normalizeRoomCode(roomCode))}`;
     navigator.clipboard.writeText(tvUrl).then(() => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);

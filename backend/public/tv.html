@@ -213,14 +213,31 @@ requestWakeLock().then(acquired => {
         const wsUrl = `${protocol}//${window.location.host}`;
         
         // For development outside the browser serving it, you might need to hardcode the IP:
-        // const wsUrl = 'ws://YOUR_LOCAL_IP:3000';
+        // const wsUrl = 'ws://YOUR_LOCAL_IP:8901';
+
+        const normalizeRoomCode = (value) => {
+            const normalized = String(value || '')
+                .trim()
+                .toUpperCase()
+                .replace(/[^A-Z0-9_-]/g, '')
+                .slice(0, 24);
+            return normalized || 'DEFAULT';
+        };
 
         // Extract room ID from URL query params
         const urlParams = new URLSearchParams(window.location.search);
-        const roomId = urlParams.get('room') || 'default';
+        const roomId = normalizeRoomCode(urlParams.get('room') || 'default');
         document.getElementById('room-code-val').innerText = roomId;
 
         let ws;
+        let appPingTimer = null;
+
+        function clearPingTimer() {
+            if (appPingTimer) {
+                clearInterval(appPingTimer);
+                appPingTimer = null;
+            }
+        }
 
         function connectWebSocket() {
             ws = new WebSocket(wsUrl);
@@ -233,6 +250,12 @@ requestWakeLock().then(acquired => {
                 
                 // Join room
                 ws.send(JSON.stringify({ type: 'join', room: roomId }));
+
+                clearPingTimer();
+                appPingTimer = setInterval(() => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                    ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+                }, 20000);
             };
 
             ws.onmessage = (event) => {
@@ -306,6 +329,7 @@ requestWakeLock().then(acquired => {
             };
 
             ws.onclose = () => {
+                clearPingTimer();
                 console.log('WebSocket disconnected. Attempting to reconnect...');
                 statusElement.style.display = 'block';
                 statusElement.innerText = 'Disconnected - Reconnecting...';
