@@ -34,7 +34,7 @@ function buildQueryTokens(query) {
         .toLowerCase()
         .split(/\s+/)
         .map(t => t.trim())
-        .filter(t => t.length > 1);
+    .filter(t => t.length > 0);
 }
 
 function normalizeSearchText(value) {
@@ -109,6 +109,15 @@ function applySimilarityThresholds(items, query) {
         return { ...item, _similarity: score };
     });
 
+    if (normalizedQuery.length <= 2) {
+        return scored.sort((a, b) => (
+            b._similarity - a._similarity ||
+            matchRank(b.title, normalizedQuery) - matchRank(a.title, normalizedQuery) ||
+            a.title.length - b.title.length ||
+            a.title.localeCompare(b.title)
+        ));
+    }
+
     const thresholds = [100, 90, 80, 70, 60, 50];
     for (const threshold of thresholds) {
         const matches = scored.filter(item => item._similarity >= threshold);
@@ -123,7 +132,12 @@ function applySimilarityThresholds(items, query) {
         }
     }
 
-    return [];
+    return scored.sort((a, b) => (
+        b._similarity - a._similarity ||
+        matchRank(b.title, normalizedQuery) - matchRank(a.title, normalizedQuery) ||
+        a.title.length - b.title.length ||
+        a.title.localeCompare(b.title)
+    ));
 }
 
 function passesQuery(title, queryTokens, query) {
@@ -134,7 +148,7 @@ function passesQuery(title, queryTokens, query) {
 
     if (normalizedTitle === normalizedQuery) return true;
     if (normalizedTitle.startsWith(normalizedQuery)) return true;
-    if (normalizedQuery.length >= 2 && normalizedTitle.includes(normalizedQuery)) return true;
+    if (normalizedQuery.length >= 1 && normalizedTitle.includes(normalizedQuery)) return true;
     if (queryTokens.some(token => normalizedTitle.includes(token))) return true;
 
     return similarityPercent(normalizedTitle, normalizedQuery) >= 50;

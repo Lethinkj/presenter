@@ -1862,7 +1862,8 @@ function App() {
         let queryBuilder = supabase.from('songs').select('id, title');
 
         if (tokens.length <= 1) {
-          queryBuilder = queryBuilder.ilike('title', `%${searchQuery}%`);
+          const token = tokens[0] || searchQuery.trim();
+          queryBuilder = queryBuilder.ilike('title', `%${token}%`);
         } else {
           const orFilters = tokens.map(t => `title.ilike.%${t.replace(/,/g, '')}%`).join(',');
           queryBuilder = queryBuilder.or(orFilters);
@@ -1871,10 +1872,21 @@ function App() {
         const { data, error } = await queryBuilder.limit(250);
         if (error) throw error;
         const mapped = data.map(item => ({ id: item.id, title: item.title, source: 'db' }));
-        setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
+        if (mapped.length === 0 && tokens.length > 0) {
+          const cachedSongs = Object.values(offlineCache);
+          const localMatches = cachedSongs.filter(s => {
+            const title = (s.title || '').toLowerCase();
+            return tokens.some(t => title.includes(t));
+          });
+          const fallback = localMatches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true }));
+          setResults(rankByRelatedness(fallback, searchQuery).slice(0, 100));
+        } else {
+          setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
+        }
       } else {
         const res = await axios.get(`${apiBase}/search?q=${encodeURIComponent(searchQuery)}`);
-        setResults(res.data.map(item => ({ url: item.url, title: item.title, source: 'web' })));
+        const mapped = res.data.map(item => ({ url: item.url, title: item.title, source: 'web' }));
+        setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
       }
     } catch (err) {
       console.error('Search error:', err);
