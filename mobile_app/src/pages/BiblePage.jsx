@@ -90,6 +90,16 @@ const parseQuickSelectInput = (value) => {
   };
 };
 
+const scrollItemIntoList = (container, target) => {
+  if (!container || !target) return;
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const offset = targetRect.top - containerRect.top;
+  const desired = offset - (containerRect.height / 2) + (targetRect.height / 2);
+  const nextTop = Math.max(0, container.scrollTop + desired);
+  container.scrollTo({ top: nextTop, behavior: 'smooth' });
+};
+
 export default function BiblePage({
   bibleLoading,
   bibleError,
@@ -172,9 +182,8 @@ export default function BiblePage({
       if (!container) return;
 
       const target = container.querySelector(`[data-verse-key="${activeBibleVerseKey}"]`);
-      if (target && typeof target.scrollIntoView === 'function') {
-        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      if (!target) return;
+      scrollItemIntoList(container, target);
     });
 
     return () => cancelAnimationFrame(frame);

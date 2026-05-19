@@ -323,6 +323,16 @@ const discoverLocalIps = async () => {
   });
 };
 
+const scrollItemIntoList = (container, target) => {
+  if (!container || !target) return;
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const offset = targetRect.top - containerRect.top;
+  const desired = offset - (containerRect.height / 2) + (targetRect.height / 2);
+  const nextTop = Math.max(0, container.scrollTop + desired);
+  container.scrollTo({ top: nextTop, behavior: 'smooth' });
+};
+
 const createLocalSongId = () => `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const OFFLINE_STORAGE_FOLDER = 'worship-cast';
 const OFFLINE_DATA_FILE_PATH = `${OFFLINE_STORAGE_FOLDER}/offline-data.json`;
@@ -2516,9 +2526,8 @@ function App() {
       const container = bibleVerseListRef.current;
       if (!container) return;
       const target = container.querySelector(`[data-verse-key="${key}"]`);
-      if (target && typeof target.scrollIntoView === 'function') {
-        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      if (!target) return;
+      scrollItemIntoList(container, target);
     });
   };
 
