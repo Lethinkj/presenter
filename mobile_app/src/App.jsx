@@ -46,16 +46,35 @@ const normalizeRoomCode = (value, fallback = 'DEFAULT') => {
   return normalized || fallback;
 };
 
+const isLanWsHost = (host) => {
+  if (!host) return false;
+  if (host === 'localhost' || host.startsWith('127.')) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  const m = host.match(/^172\.(\d+)\./);
+  if (m) {
+    const second = Number(m[1]);
+    return second >= 16 && second <= 31;
+  }
+  return false;
+};
+
 const buildRoomScopedWsUrl = (baseWsUrl, room) => {
   const safeRoom = normalizeRoomCode(room);
 
   try {
     const parsed = new URL(baseWsUrl);
+    if (!isLanWsHost(parsed.hostname)) {
+      return parsed.toString();
+    }
     parsed.pathname = '/ws';
     parsed.searchParams.set('room', safeRoom);
     return parsed.toString();
   } catch {
     const normalizedBase = String(baseWsUrl || '').replace(/\/+$/, '');
+    if (!/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(normalizedBase)) {
+      return normalizedBase;
+    }
     const separator = normalizedBase.includes('?') ? '&' : '?';
     return `${normalizedBase}/ws${separator}room=${encodeURIComponent(safeRoom)}`;
   }
