@@ -203,8 +203,19 @@ export default function SettingsPage({
             disabled={offlineDownloadState.downloading}
           >
             <FaDownload style={{ marginRight: 6 }} />
-            {offlineDownloadState.downloading ? `Downloading... ${offlineDownloadState.downloaded}` : 'Download All Songs Offline'}
+            {offlineDownloadState.downloading
+              ? (offlineDownloadState.phase === 'saving'
+                ? 'Saving offline data...'
+                : `Downloading... ${offlineDownloadState.downloaded}${offlineDownloadState.total ? ` / ${offlineDownloadState.total}` : ''}`)
+              : 'Download All Songs Offline'}
           </button>
+          {offlineDownloadState.downloading && (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
+              {offlineDownloadState.phase === 'saving'
+                ? 'Finalizing local cache...'
+                : `Downloaded: ${offlineDownloadState.downloaded}${offlineDownloadState.total ? ` / ${offlineDownloadState.total}` : ''}`}
+            </div>
+          )}
           {offlineDownloadState.lastError && (
             <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
               Download error: {offlineDownloadState.lastError}

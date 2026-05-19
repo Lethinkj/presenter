@@ -595,7 +595,7 @@ function App() {
     return Array.isArray(parsed) ? parsed : [];
   });
   const [syncState, setSyncState] = useState({ syncing: false, lastRun: null, lastError: '' });
-  const [offlineDownloadState, setOfflineDownloadState] = useState({ downloading: false, downloaded: 0, total: null, lastError: '' });
+  const [offlineDownloadState, setOfflineDownloadState] = useState({ downloading: false, downloaded: 0, total: null, lastError: '', phase: 'idle' });
   const [storageState, setStorageState] = useState({ permission: 'unknown', loaded: false, lastSavedAt: null, lastError: '', directory: 'Data' });
   const [localSnapshotSavedAt, setLocalSnapshotSavedAt] = useState(() => {
     const parsed = readJsonLocalStorageSafely(LOCAL_DATA_SNAPSHOT_KEY, {}, { maxChars: 120000 });
@@ -646,6 +646,17 @@ function App() {
     if (API_BASE_NORMALIZED) return API_BASE_NORMALIZED;
     return API_BASE;
   }, [useLanApi, cleanedServerHost, cleanedServerPort]);
+
+  const lanWsBase = useMemo(() => {
+    if (!cleanedServerHost) return '';
+    return normalizeWsUrl(`ws://${cleanedServerHost}:${cleanedServerPort}`);
+  }, [cleanedServerHost, cleanedServerPort]);
+
+  const effectiveWsBase = useMemo(() => {
+    if (presentRoutingMode === 'online') return WS_URL;
+    if (lanWsBase) return lanWsBase;
+    return WS_URL;
+  }, [presentRoutingMode, lanWsBase]);
 
   const detectedLanHost = useMemo(() => {
     if (cleanedServerHost) return cleanedServerHost;
@@ -812,7 +823,7 @@ function App() {
       lastError: `${label}: ${message}`
     }));
     return false;
-  }, []);
+  }, [effectiveWsBase]);
 
   const ensureStoragePermission = useCallback(async (askUser = true) => {
     if (!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD) {
@@ -1254,9 +1265,27 @@ function App() {
       return;
     }
 
-    setOfflineDownloadState({ downloading: true, downloaded: 0, total: null, lastError: '' });
+    setOfflineDownloadState({ downloading: true, downloaded: 0, total: null, lastError: '', phase: 'starting' });
 
     try {
+      let totalCount = null;
+      try {
+        const { count, error: countError } = await supabase
+          .from('songs')
+          .select('id', { count: 'exact', head: true });
+        if (!countError && Number.isFinite(count)) {
+          totalCount = count;
+        }
+      } catch {
+        totalCount = null;
+      }
+
+      setOfflineDownloadState(prev => ({
+        ...prev,
+        total: totalCount,
+        phase: 'fetching'
+      }));
+
       const PAGE_SIZE = 250;
       let page = 0;
       let totalDownloaded = 0;
@@ -1302,19 +1331,33 @@ function App() {
         }
 
         totalDownloaded += songs.length;
-        setOfflineDownloadState(prev => ({ ...prev, downloaded: totalDownloaded }));
+        setOfflineDownloadState(prev => ({
+          ...prev,
+          downloaded: totalDownloaded,
+          phase: 'fetching'
+        }));
         page += 1;
 
         if (songs.length < PAGE_SIZE) break;
       }
 
+      setOfflineDownloadState(prev => ({ ...prev, phase: 'saving' }));
       setOfflineCache(merged);
       await bulkUpsertOfflineSongsSqlite(Object.values(merged));
-      setOfflineDownloadState({ downloading: false, downloaded: totalDownloaded, total: totalDownloaded, lastError: '' });
+      setOfflineDownloadState({ downloading: false, downloaded: totalDownloaded, total: totalCount ?? totalDownloaded, lastError: '', phase: 'done' });
       alert(`Downloaded ${totalDownloaded} songs for offline access.`);
     } catch (err) {
-      setOfflineDownloadState(prev => ({ ...prev, downloading: false, lastError: err.message || 'Failed to download songs' }));
+      setOfflineDownloadState(prev => ({
+        ...prev,
+        downloading: false,
+        lastError: err.message || 'Failed to download songs',
+        phase: 'error'
+      }));
       alert('Offline download failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      setOfflineDownloadState(prev => (
+        prev.downloading ? { ...prev, downloading: false, phase: prev.lastError ? 'error' : 'done' } : prev
+      ));
     }
   }, [ensureStoragePermission, bulkUpsertOfflineSongsSqlite]);
 
@@ -1357,7 +1400,7 @@ function App() {
       const immediateCandidates = [
         cleanedServerHost,
         hostFromUrl(apiBase),
-        hostFromUrl(WS_URL)
+        hostFromUrl(effectiveWsBase)
       ];
 
       for (const hostValue of immediateCandidates) {
@@ -1637,7 +1680,7 @@ function App() {
 
       let socket;
       try {
-        const scopedWsUrl = buildRoomScopedWsUrl(WS_URL, roomCodeRef.current);
+        const scopedWsUrl = buildRoomScopedWsUrl(effectiveWsBase, roomCodeRef.current);
         socket = new WebSocket(scopedWsUrl);
       } catch (err) {
         setOfflineServerStatus(prev => ({
@@ -2892,7 +2935,7 @@ function App() {
         useLanApi={useLanApi}
         setUseLanApi={setUseLanApi}
         apiBase={apiBase}
-        WS_URL={WS_URL}
+        WS_URL={effectiveWsBase}
         detectedLanHost={detectedLanHost}
         offlineTvUrl={offlineTvUrl}
         checkOfflineServer={checkOfflineServer}

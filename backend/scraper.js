@@ -288,7 +288,8 @@ function extractJsonLdArticleText($) {
 
 async function searchWeb(query) {
     const queryTokens = buildQueryTokens(query);
-    const fullQuery = `${query} tamil christian song lyrics`;
+    const hasTamil = /[\u0B80-\u0BFF]/.test(query);
+    const fullQuery = hasTamil ? `${query} lyrics` : `${query} tamil christian song lyrics`;
     const { data } = await axios.get(DDG_SEARCH_URL, {
         headers: HEADERS,
         timeout: 12000,
