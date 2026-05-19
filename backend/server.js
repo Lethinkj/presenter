@@ -27,6 +27,13 @@ app.get('/t/:room', (req, res) => {
     res.redirect(`/tv.html?room=${safeRoom}`);
 });
 
+// Short online-present route for easy sharing.
+app.get('/room/:room', (req, res) => {
+    const rawRoom = String(req.params.room || 'default').trim().toUpperCase();
+    const safeRoom = encodeURIComponent(rawRoom.slice(0, 24) || 'DEFAULT');
+    res.redirect(`/tv.html?room=${safeRoom}`);
+});
+
 // Initialize Supabase client
 const cleanEnv = (value) => String(value || '').trim().replace(/^['\"]|['\"]$/g, '');
 const supabaseUrl = cleanEnv(process.env.SUPABASE_URL);

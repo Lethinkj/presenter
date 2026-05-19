@@ -247,7 +247,7 @@ const formatOfflineLink = (host, port, roomCode, includeProtocol = true) => {
   if (!host) return '';
   const safePort = String(port || '3000');
   const portPart = safePort === '80' ? '' : `:${safePort}`;
-  return `${includeProtocol ? 'http://' : ''}${host}${portPart}/t/${roomCode}`;
+  return `${includeProtocol ? 'http://' : ''}${host}${portPart}`;
 };
 
 const isPrivateIpv4 = (ip) => {
@@ -332,6 +332,7 @@ const LOCAL_DATA_SNAPSHOT_KEY = 'worship_local_data_snapshot';
 const OFFLINE_CACHE_CHUNK_META = 'worship_offline_cache_chunks';
 const OFFLINE_CACHE_CHUNK_PREFIX = 'worship_offline_cache_chunk_';
 const OFFLINE_CACHE_CHUNK_SIZE = 400;
+const OFFLINE_DOWNLOAD_PROMPT_KEY = 'worship_offline_download_prompted';
 const DEFAULT_PRESENT_ROUTING_MODE = 'mirror';
 const normalizePresentRoutingMode = (value) => {
   const mode = String(value || '').trim().toLowerCase();
@@ -613,8 +614,24 @@ function App() {
   const [presentRoutingMode, setPresentRoutingMode] = useState(() => normalizePresentRoutingMode(localStorage.getItem('presenterRoutingMode')));
 
   // Connection config for LAN/hotspot use.
-  const [serverHost, setServerHost] = useState(() => localStorage.getItem('presenterServerHost') || '');
-  const [serverPort, setServerPort] = useState(() => localStorage.getItem('presenterServerPort') || '3000');
+  const [serverHost, setServerHost] = useState(() => localStorage.getItem('presenterServerHost') || '10.224.62.152');
+  const [serverPort, setServerPort] = useState(() => {
+    const storedPort = localStorage.getItem('presenterServerPort');
+    const storedHost = localStorage.getItem('presenterServerHost');
+    const normalizedHost = normalizeHostInput(storedHost);
+
+    if (storedPort && storedPort !== '3000') return storedPort;
+    if (normalizedHost && isShareableOfflineHost(normalizedHost)) return '8901';
+    return storedPort || '8901';
+  });
+
+  useEffect(() => {
+    const normalizedHost = normalizeHostInput(serverHost);
+    if (!normalizedHost || !isShareableOfflineHost(normalizedHost)) return;
+    if (!serverPort || serverPort === '3000') {
+      setServerPort('8901');
+    }
+  }, [serverHost, serverPort]);
 
   const cleanedServerHost = useMemo(() => normalizeHostInput(serverHost), [serverHost]);
   const cleanedServerPort = useMemo(() => {
@@ -644,7 +661,7 @@ function App() {
     [detectedLanHost, cleanedServerPort, roomCode]
   );
   const onlineTvUrl = useMemo(
-    () => `${apiBase}/tv.html?room=${encodeURIComponent(roomCode)}`,
+    () => `${apiBase}/room/${encodeURIComponent(roomCode)}`,
     [apiBase, roomCode]
   );
 
@@ -1225,9 +1242,12 @@ function App() {
     syncInProgressRef.current = false;
   }, [apiBase, upsertOfflineSongSqlite, deleteOfflineSongSqlite]);
 
-  const downloadAllSongsForOffline = useCallback(async () => {
-    const confirmed = window.confirm('Do you want to download all songs to local app files for offline access?');
-    if (!confirmed) return;
+  const downloadAllSongsForOffline = useCallback(async (options = {}) => {
+    const { skipConfirm = false } = options;
+    if (!skipConfirm) {
+      const confirmed = window.confirm('Do you want to download all songs to local app files for offline access?');
+      if (!confirmed) return;
+    }
 
     if (!navigator.onLine) {
       alert('Internet/mobile data is required for initial download.');
@@ -1297,6 +1317,17 @@ function App() {
       alert('Offline download failed: ' + (err.message || 'Unknown error'));
     }
   }, [ensureStoragePermission, bulkUpsertOfflineSongsSqlite]);
+
+  useEffect(() => {
+    if (showProfileSetup) return;
+    if (localStorage.getItem(OFFLINE_DOWNLOAD_PROMPT_KEY) === 'true') return;
+
+    localStorage.setItem(OFFLINE_DOWNLOAD_PROMPT_KEY, 'true');
+    const shouldDownload = window.confirm('Download all songs for offline use now? This may take a few minutes.');
+    if (shouldDownload) {
+      downloadAllSongsForOffline({ skipConfirm: true });
+    }
+  }, [showProfileSetup, downloadAllSongsForOffline]);
 
   const probeHealth = useCallback(async (candidateHost) => {
     try {
@@ -1858,15 +1889,15 @@ function App() {
     setSelectedLetter(null);
     try {
       if (activeTab === 'db') {
-        const tokens = searchQuery.toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
+        const rawQuery = searchQuery.trim();
+        const tokens = rawQuery.toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
         let queryBuilder = supabase.from('songs').select('id, title');
 
         if (tokens.length <= 1) {
-          const token = tokens[0] || searchQuery.trim();
-          queryBuilder = queryBuilder.ilike('title', `%${token}%`);
+          const token = tokens[0] || rawQuery;
+          queryBuilder = queryBuilder.ilike('title', `${token}%`);
         } else {
-          const orFilters = tokens.map(t => `title.ilike.%${t.replace(/,/g, '')}%`).join(',');
-          queryBuilder = queryBuilder.or(orFilters);
+          queryBuilder = queryBuilder.ilike('title', `${rawQuery}%`);
         }
 
         const { data, error } = await queryBuilder.limit(250);
@@ -1876,7 +1907,8 @@ function App() {
           const cachedSongs = Object.values(offlineCache);
           const localMatches = cachedSongs.filter(s => {
             const title = (s.title || '').toLowerCase();
-            return tokens.some(t => title.includes(t));
+            if (tokens.length <= 1) return title.startsWith(tokens[0]);
+            return title.startsWith(rawQuery.toLowerCase());
           });
           const fallback = localMatches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true }));
           setResults(rankByRelatedness(fallback, searchQuery).slice(0, 100));
@@ -1891,10 +1923,14 @@ function App() {
     } catch (err) {
       console.error('Search error:', err);
       if (activeTab === 'db') {
+        const rawQuery = searchQuery.trim().toLowerCase();
+        const tokens = rawQuery.split(/\s+/).filter(Boolean);
         const cachedSongs = Object.values(offlineCache);
         const localMatches = cachedSongs.filter(s => {
           const title = (s.title || '').toLowerCase();
-          return searchQuery.toLowerCase().split(/\s+/).filter(Boolean).some(t => title.includes(t));
+          if (!tokens.length) return false;
+          if (tokens.length <= 1) return title.startsWith(tokens[0]);
+          return title.startsWith(rawQuery);
         });
         const mapped = localMatches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true }));
         setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
@@ -2770,7 +2806,7 @@ function App() {
 
   // ---- Share Link ----
   const handleShareLink = () => {
-    const tvUrl = `${apiBase}/tv.html?room=${roomCode}`;
+    const tvUrl = `${apiBase}/room/${roomCode}`;
     navigator.clipboard.writeText(tvUrl).then(() => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
