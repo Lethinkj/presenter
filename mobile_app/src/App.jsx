@@ -62,6 +62,7 @@ const buildRoomScopedWsUrl = (baseWsUrl, room) => {
 };
 
 export const API_BASE = API_BASE_NORMALIZED || (SERVER_IP ? `http://${SERVER_IP}:${DEFAULT_SERVER_PORT}` : `http://localhost:${DEFAULT_SERVER_PORT}`);
+export const ONLINE_API_BASE = API_BASE_NORMALIZED || API_BASE;
 export const WS_URL = normalizeWsUrl(
   PROD_WS || (API_BASE_NORMALIZED ? API_BASE_NORMALIZED.replace(/^http/, 'ws') : (SERVER_IP ? `ws://${SERVER_IP}:${DEFAULT_SERVER_PORT}` : `ws://localhost:${DEFAULT_SERVER_PORT}`))
 );
@@ -686,8 +687,7 @@ function App() {
   }, [cleanedServerHost, cleanedServerPort]);
 
   const effectiveWsBase = useMemo(() => {
-    if (presentRoutingMode === 'online') return WS_URL;
-    if (lanWsBase) return lanWsBase;
+    if (presentRoutingMode === 'offline') return lanWsBase || WS_URL;
     return WS_URL;
   }, [presentRoutingMode, lanWsBase]);
 
@@ -705,8 +705,8 @@ function App() {
     [detectedLanHost, cleanedServerPort, roomCode]
   );
   const onlineTvUrl = useMemo(
-    () => `${apiBase}/room/${encodeURIComponent(normalizeRoomCode(roomCode))}`,
-    [apiBase, roomCode]
+    () => `${ONLINE_API_BASE}/room/${encodeURIComponent(normalizeRoomCode(roomCode))}`,
+    [roomCode]
   );
 
   const pendingQueueRef = useRef(pendingSyncQueue);
@@ -2881,7 +2881,7 @@ function App() {
 
   // ---- Share Link ----
   const handleShareLink = () => {
-    const tvUrl = `${apiBase}/room/${encodeURIComponent(normalizeRoomCode(roomCode))}`;
+    const tvUrl = `${ONLINE_API_BASE}/room/${encodeURIComponent(normalizeRoomCode(roomCode))}`;
     navigator.clipboard.writeText(tvUrl).then(() => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
