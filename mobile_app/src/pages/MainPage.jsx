@@ -10,9 +10,9 @@ import {
   FaSave,
   FaSearch,
   FaStar,
-  FaFont,
   FaWifi,
-  FaCog
+  FaCog,
+  FaStop
 } from 'react-icons/fa';
 import BiblePage from './BiblePage';
 import ImagePage from './ImagePage';
@@ -226,20 +226,15 @@ export default function MainPage({
             <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
             <div className="section-actions">
               {activeTab === 'bible' && (
-                <>
-                  <button className="bible-font-btn" onClick={() => setShowFontPicker(f => !f)}>
-                    <FaFont style={{ marginRight: 6 }} /> Font
-                  </button>
-                  <button
-                    className={`bible-ref-only-btn${bibleRefOnlyMode ? ' active' : ''}`}
-                    onClick={() => setBibleRefOnlyMode(v => !v)}
-                    title="Reference only mode: show only the verse reference on the TV"
-                    type="button"
-                  >
-                    Ref Only
-                  </button>
-                  <button className="mini-clear-btn" onClick={clearScreen} title="Clear TV Screen">Clear</button>
-                </>
+                <button
+                  className="settings-icon-btn top-settings-btn"
+                  onClick={clearScreen}
+                  title="Clear screen"
+                  type="button"
+                  style={{ color: 'var(--error-color)', background: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.35)',borderRadius: 50 }}
+                >
+                  <FaStop />
+                </button>
               )}
               <button
                 className="settings-icon-btn top-settings-btn"
@@ -272,11 +267,7 @@ export default function MainPage({
               bibleLoading={bibleLoading}
               bibleError={bibleError}
               selectedBibleBook={selectedBibleBook}
-              showBibleControls={showBibleControls}
-              setShowBibleControls={setShowBibleControls}
               bibleChapterNumber={bibleChapterNumber}
-              showFontPicker={showFontPicker}
-              setShowFontPicker={setShowFontPicker}
               bibleBooks={bibleBooks}
               openBibleBook={openBibleBook}
               goToBibleChapter={goToBibleChapter}
@@ -295,6 +286,8 @@ export default function MainPage({
               displayFontSize={displayFontSize}
               setDisplayFontSize={setDisplayFontSize}
               clearScreen={clearScreen}
+              bibleRefOnlyMode={bibleRefOnlyMode}
+              setBibleRefOnlyMode={setBibleRefOnlyMode}
             />
           )}
 
