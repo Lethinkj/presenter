@@ -225,7 +225,7 @@ export default function MainPage({
             </button>
             <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
             <div className="section-actions">
-              {activeTab === 'bible' && (
+              {activeTab === 'bible' && !!activeBibleVerseKey && (
                 <button
                   className="settings-icon-btn top-settings-btn"
                   onClick={clearScreen}
