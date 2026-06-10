@@ -117,6 +117,34 @@ export default function BiblePage({
   const [verseSheetOpen, setVerseSheetOpen] = useState(false);
   const [verseMenuKey, setVerseMenuKey] = useState(null);
 
+  // Back-button closes sheets
+  const sheetStateRef = useRef({});
+  useEffect(() => {
+    sheetStateRef.current = { quickSelectOpen, drawerOpen, verseSheetOpen, chapterSheetOpen, bookSheetOpen };
+  }, [quickSelectOpen, drawerOpen, verseSheetOpen, chapterSheetOpen, bookSheetOpen]);
+
+  const prevHasSheetRef = useRef(false);
+  useEffect(() => {
+    const hasSheet = bookSheetOpen || chapterSheetOpen || verseSheetOpen || drawerOpen || quickSelectOpen;
+    if (hasSheet && !prevHasSheetRef.current) {
+      history.pushState({ bibleSheet: true }, '');
+    }
+    prevHasSheetRef.current = hasSheet;
+  }, [bookSheetOpen, chapterSheetOpen, verseSheetOpen, drawerOpen, quickSelectOpen]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const s = sheetStateRef.current;
+      if (s.quickSelectOpen) { closeQuickSelect(); return; }
+      if (s.drawerOpen) { setDrawerOpen(false); return; }
+      if (s.verseSheetOpen) { setVerseSheetOpen(false); return; }
+      if (s.chapterSheetOpen) { setChapterSheetOpen(false); return; }
+      if (s.bookSheetOpen) { setBookSheetOpen(false); return; }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const parsedQuickSelect = useMemo(() => parseQuickSelectInput(quickSelectValue), [quickSelectValue]);
 
   const contextShortcut = useMemo(() => {
