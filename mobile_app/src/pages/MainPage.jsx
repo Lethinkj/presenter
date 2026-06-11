@@ -106,7 +106,8 @@ export default function MainPage({
   profileNameInput,
   setProfileNameInput,
   completeProfileSetup,
-  openSettingsPage
+  openSettingsPage,
+  registerBibleBackHandler,
 }) {
   const parseUrl = (value) => {
     const raw = String(value || '').trim();
@@ -288,6 +289,7 @@ export default function MainPage({
               clearScreen={clearScreen}
               bibleRefOnlyMode={bibleRefOnlyMode}
               setBibleRefOnlyMode={setBibleRefOnlyMode}
+              registerBibleBackHandler={registerBibleBackHandler}
             />
           )}
 

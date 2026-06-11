@@ -519,6 +519,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHomeCards, setShowHomeCards] = useState(true);
   const settingsReturnRef = useRef(null);
+  const bibleBackHandlerRef = useRef(null);
 
   // Presentation
   const [selectedSong, setSelectedSong] = useState(null);
@@ -1869,6 +1870,9 @@ function App() {
       setActiveStanza(null);
       return true;
     }
+    if (bibleBackHandlerRef.current?.()) {
+      return true;
+    }
     if (!showHomeCards) {
       setShowHomeCards(true);
       setResults([]);
@@ -3136,6 +3140,7 @@ function App() {
       profileNameInput={profileNameInput}
       setProfileNameInput={setProfileNameInput}
       completeProfileSetup={completeProfileSetup}
+      registerBibleBackHandler={(fn) => { bibleBackHandlerRef.current = fn; }}
     />
   );
 }
