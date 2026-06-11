@@ -10,12 +10,14 @@ import {
   FaSave,
   FaSearch,
   FaStar,
+  FaStickyNote,
   FaWifi,
   FaCog,
   FaStop
 } from 'react-icons/fa';
 import BiblePage from './BiblePage';
 import ImagePage from './ImagePage';
+import NotesPage from './NotesPage';
 import AddSongModal from './AddSongModal';
 import ProfileSetupModal from './ProfileSetupModal';
 
@@ -155,6 +157,7 @@ export default function MainPage({
     { key: 'favorites', label: 'Favorites', icon: <FaStar /> },
     { key: 'recents', label: 'Recents', icon: <FaHistory /> },
     { key: 'images', label: 'Images', icon: <FaImage /> },
+    { key: 'notes', label: 'Notes', icon: <FaStickyNote /> },
     { key: 'settings', label: 'Settings', icon: <FaCog /> }
   ];
 
@@ -263,6 +266,8 @@ export default function MainPage({
             />
           )}
 
+          {activeTab === 'notes' && <NotesPage />}
+
           {activeTab === 'bible' && (
             <BiblePage
               bibleLoading={bibleLoading}
@@ -293,7 +298,7 @@ export default function MainPage({
             />
           )}
 
-          {activeTab !== 'images' && activeTab !== 'bible' && (
+          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && (
             <div className="search-container">
               <div className="input-clear-wrap search-wrap">
                 <input
@@ -335,9 +340,9 @@ export default function MainPage({
             </div>
           )}
 
-          {activeTab !== 'images' && activeTab !== 'bible' && loading && <div className="loading">Searching...</div>}
+          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && loading && <div className="loading">Searching...</div>}
 
-          {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length > 0 && (
+          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && !loading && results.length > 0 && (
             <div className="song-list">
               {results.map((item, index) => {
                 const isFav = favorites.some(f => f.title === item.title);
@@ -373,10 +378,10 @@ export default function MainPage({
             </div>
           )}
 
-          {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
+          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && !loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
             <div className="loading">No songs found.</div>
           )}
-          {activeTab !== 'images' && activeTab !== 'bible' && !loading && results.length === 0 && selectedLetter && (
+          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && !loading && results.length === 0 && selectedLetter && (
             <div className="loading">No songs starting with "{selectedLetter}".</div>
           )}
         </div>
