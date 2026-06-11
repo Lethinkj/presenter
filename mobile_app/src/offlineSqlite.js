@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'worshipcast_offline';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const TABLE_NAME = 'offline_songs';
 
 let sqlite;
@@ -23,10 +23,16 @@ const ensureDb = async () => {
         stanzas TEXT NOT NULL,
         source TEXT,
         pending_sync INTEGER DEFAULT 0,
-        source_url TEXT
+        source_url TEXT,
+        updated_at TEXT,
+        is_deleted INTEGER DEFAULT 0
       );`
     );
     await db.execute(`CREATE INDEX IF NOT EXISTS ${TABLE_NAME}_title_idx ON ${TABLE_NAME}(title);`);
+    // Migrate v1 tables before creating indexes that depend on the new columns
+    try { await db.execute(`ALTER TABLE ${TABLE_NAME} ADD COLUMN updated_at TEXT;`); } catch {}
+    try { await db.execute(`ALTER TABLE ${TABLE_NAME} ADD COLUMN is_deleted INTEGER DEFAULT 0;`); } catch {}
+    await db.execute(`CREATE INDEX IF NOT EXISTS ${TABLE_NAME}_updated_at_idx ON ${TABLE_NAME}(updated_at);`);
   }
   return db;
 };
@@ -51,7 +57,7 @@ export const loadOfflineSongs = async () => {
   if (!active) return [];
 
   const res = await active.query(
-    `SELECT id, title, stanzas, source, pending_sync, source_url FROM ${TABLE_NAME}`
+    `SELECT id, title, stanzas, source, pending_sync, source_url, updated_at, is_deleted FROM ${TABLE_NAME} WHERE is_deleted = 0`
   );
   const rows = res?.values || [];
   return rows.map((row) => ({
@@ -60,8 +66,20 @@ export const loadOfflineSongs = async () => {
     stanzas: parseStanzas(row.stanzas),
     source: row.source || 'db',
     pendingSync: Number(row.pending_sync) === 1,
-    sourceUrl: row.source_url || null
+    sourceUrl: row.source_url || null,
+    updatedAt: row.updated_at || null,
   }));
+};
+
+export const getMaxUpdatedAt = async () => {
+  const active = await ensureDb();
+  if (!active) return null;
+
+  const res = await active.query(
+    `SELECT MAX(updated_at) as max_updated_at FROM ${TABLE_NAME}`
+  );
+  const val = res?.values?.[0]?.max_updated_at;
+  return val || null;
 };
 
 export const upsertOfflineSong = async (song) => {
@@ -74,20 +92,24 @@ export const upsertOfflineSong = async (song) => {
     stanzas: JSON.stringify(song.stanzas || []),
     source: song.source || 'db',
     pending_sync: song.pendingSync ? 1 : 0,
-    source_url: song.sourceUrl || null
+    source_url: song.sourceUrl || null,
+    updated_at: song.updatedAt || null,
+    is_deleted: song.isDeleted ? 1 : 0,
   };
 
   if (!payload.id || !payload.title) return;
 
   await active.run(
-    `INSERT OR REPLACE INTO ${TABLE_NAME} (id, title, stanzas, source, pending_sync, source_url) VALUES (?, ?, ?, ?, ?, ?)` ,
+    `INSERT OR REPLACE INTO ${TABLE_NAME} (id, title, stanzas, source, pending_sync, source_url, updated_at, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       payload.id,
       payload.title,
       payload.stanzas,
       payload.source,
       payload.pending_sync,
-      payload.source_url
+      payload.source_url,
+      payload.updated_at,
+      payload.is_deleted,
     ]
   );
 };
@@ -108,20 +130,24 @@ export const bulkUpsertOfflineSongs = async (songs) => {
         stanzas: JSON.stringify(song?.stanzas || []),
         source: song?.source || 'db',
         pending_sync: song?.pendingSync ? 1 : 0,
-        source_url: song?.sourceUrl || null
+        source_url: song?.sourceUrl || null,
+        updated_at: song?.updatedAt || null,
+        is_deleted: song?.isDeleted ? 1 : 0,
       };
 
       if (!payload.id || !payload.title) continue;
 
       await active.run(
-        `INSERT OR REPLACE INTO ${TABLE_NAME} (id, title, stanzas, source, pending_sync, source_url) VALUES (?, ?, ?, ?, ?, ?)` ,
+        `INSERT OR REPLACE INTO ${TABLE_NAME} (id, title, stanzas, source, pending_sync, source_url, updated_at, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           payload.id,
           payload.title,
           payload.stanzas,
           payload.source,
           payload.pending_sync,
-          payload.source_url
+          payload.source_url,
+          payload.updated_at,
+          payload.is_deleted,
         ]
       );
     }

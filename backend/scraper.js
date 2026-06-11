@@ -487,6 +487,34 @@ async function searchSongs(query) {
     }
 }
 
+async function fetchLyricsFromTCS(url) {
+    const { data } = await axios.get(url, { headers: HEADERS, timeout: 12000 });
+    const $ = cheerio.load(data);
+
+    // Tamil lyrics live in #tamiltext > p, one <p> per stanza, lines joined by <br>
+    const stanzas = [];
+    $('#tamiltext p').each((i, el) => {
+        const lines = [];
+        $(el).contents().each((j, node) => {
+            if (node.type === 'text') {
+                const t = (node.data || '').trim();
+                if (t) lines.push(t);
+            } else if (node.name === 'br') {
+                // br is the line separator — already handled by text nodes on each side
+            }
+        });
+        // Fallback: get inner text if no text nodes found
+        if (lines.length === 0) {
+            const text = $(el).text().trim();
+            if (text) lines.push(...text.split(/\n+/).map(l => l.trim()).filter(Boolean));
+        }
+        const stanza = lines.join('\n').trim();
+        if (stanza) stanzas.push(stanza);
+    });
+
+    return stanzas.length > 0 ? stanzas : null;
+}
+
 async function fetchLyricsFromChristSquare(url) {
     const { data } = await axios.get(url, { headers: HEADERS, timeout: 12000 });
     const $ = cheerio.load(data);
@@ -656,6 +684,12 @@ async function fetchLyrics(url) {
                 return await fetchLyricsFromGenericPage(sourceUrl);
             }
             return stanzas;
+        }
+
+        if (host.includes('tamilchristiansongs.in')) {
+            const stanzas = await fetchLyricsFromTCS(sourceUrl);
+            if (stanzas && stanzas.length > 0) return stanzas;
+            return await fetchLyricsFromGenericPage(sourceUrl);
         }
 
         return await fetchLyricsFromGenericPage(sourceUrl);

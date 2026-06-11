@@ -1,17 +1,14 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from './lib/supabase';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import SongPresentationPage from './pages/SongPresentationPage';
 import SettingsPage from './pages/SettingsPage';
 import MainPage from './pages/MainPage';
-import { initOfflineSqlite, loadOfflineSongs, upsertOfflineSong, bulkUpsertOfflineSongs, deleteOfflineSong } from './offlineSqlite';
+import { upsertOfflineSong, bulkUpsertOfflineSongs, deleteOfflineSong } from './offlineSqlite';
+import { syncSongs } from './utils/syncManager';
 
-// Supabase
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://xxvhhgberfkqvwjzkoia.supabase.co';
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4dmhoZ2JlcmZrcXZ3anprb2lhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzODcyNjksImV4cCI6MjA4ODk2MzI2OX0.GLvwq5RUcTBM7yZxiSmi7sa7NQ4ItmIUrkoCJzkC8I0';
-const supabase = createClient(supabaseUrl, supabaseKey);
 
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
@@ -108,118 +105,6 @@ const createDeviceCode = () => {
   return `DEV-${seed.slice(0, 8)}`;
 };
 
-const loadTabSearchState = () => {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('tabSearchState') || '{}');
-    return {
-      db: parsed.db || '',
-      web: parsed.web || '',
-      favorites: parsed.favorites || '',
-      images: parsed.images || '',
-      bible: parsed.bible || '',
-      recents: parsed.recents || ''
-    };
-  } catch {
-    return { db: '', web: '', favorites: '', images: '', bible: '', recents: '' };
-  }
-};
-
-const normalizeSearchText = (value) => {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-};
-
-const levenshteinDistance = (left, right) => {
-  const a = normalizeSearchText(left);
-  const b = normalizeSearchText(right);
-  if (!a) return b.length;
-  if (!b) return a.length;
-  if (a === b) return 0;
-
-  const aLen = a.length;
-  const bLen = b.length;
-  const prev = new Array(bLen + 1).fill(0);
-  const curr = new Array(bLen + 1).fill(0);
-
-  for (let j = 0; j <= bLen; j += 1) prev[j] = j;
-
-  for (let i = 1; i <= aLen; i += 1) {
-    curr[0] = i;
-    const aChar = a.charAt(i - 1);
-    for (let j = 1; j <= bLen; j += 1) {
-      const cost = aChar === b.charAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(
-        prev[j] + 1,
-        curr[j - 1] + 1,
-        prev[j - 1] + cost
-      );
-    }
-    for (let j = 0; j <= bLen; j += 1) prev[j] = curr[j];
-  }
-
-  return prev[bLen];
-};
-
-const similarityPercent = (left, right) => {
-  const a = normalizeSearchText(left);
-  const b = normalizeSearchText(right);
-  if (!a && !b) return 0;
-  if (a === b) return 100;
-  const distance = levenshteinDistance(a, b);
-  const maxLen = Math.max(a.length, b.length) || 1;
-  const base = Math.max(0, Math.round((1 - distance / maxLen) * 100));
-
-  if (b.length >= 2 && a.startsWith(b)) return Math.max(90, base);
-  if (b.length >= 3 && a.includes(b)) return Math.max(70, base);
-  return base;
-};
-
-const matchRank = (title, query) => {
-  const a = normalizeSearchText(title);
-  const b = normalizeSearchText(query);
-  if (!a || !b) return 0;
-  if (a === b) return 3;
-  if (a.startsWith(b)) return 2;
-  if (a.includes(b)) return 1;
-  return 0;
-};
-
-const rankByRelatedness = (items, query) => {
-  const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) return items;
-
-  const scored = [...items].map(item => {
-    const score = similarityPercent(item.title, normalizedQuery);
-    return { ...item, _similarity: score };
-  });
-
-  const thresholds = [100, 90, 80, 70, 60, 50];
-  for (const threshold of thresholds) {
-    const matches = scored.filter(item => item._similarity >= threshold);
-    if (matches.length > 0) {
-      return matches
-        .sort((a, b) => (
-          b._similarity - a._similarity ||
-          matchRank(b.title, normalizedQuery) - matchRank(a.title, normalizedQuery) ||
-          a.title.length - b.title.length ||
-          a.title.localeCompare(b.title)
-        ))
-        .map(({ _similarity, ...rest }) => rest);
-    }
-  }
-
-  return scored
-    .sort((a, b) => (
-      b._similarity - a._similarity ||
-      matchRank(b.title, normalizedQuery) - matchRank(a.title, normalizedQuery) ||
-      a.title.length - b.title.length ||
-      a.title.localeCompare(b.title)
-    ))
-    .map(({ _similarity, ...rest }) => rest);
-};
 
 const extractFirstIpv4 = (value) => {
   const text = String(value || '');
@@ -512,17 +397,16 @@ const optimizeImageForPresent = async (file) => {
 
 function App() {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeTab') || 'db');
-  const [tabSearch, setTabSearch] = useState(() => loadTabSearchState());
-  const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSettings, setShowSettings] = useState(false);
   const [showHomeCards, setShowHomeCards] = useState(true);
   const settingsReturnRef = useRef(null);
   const bibleBackHandlerRef = useRef(null);
+  const loadSongRef = useRef(null);
 
   // Presentation
   const [selectedSong, setSelectedSong] = useState(null);
+  const [songQueue, setSongQueue] = useState({ results: [], index: -1 });
   const [ws, setWs] = useState(null);
   const wsRef = useRef(null);
   const websocketManuallyStoppedRef = useRef(false);
@@ -542,7 +426,6 @@ function App() {
   const [editTitle, setEditTitle] = useState('');
   const [editableStanzas, setEditableStanzas] = useState([]);
   const [savingEdits, setSavingEdits] = useState(false);
-  const [savingWebSongs, setSavingWebSongs] = useState({});
 
   const [homePresentExpanded, setHomePresentExpanded] = useState(false);
   const [homeOfflineLink, setHomeOfflineLink] = useState('');
@@ -571,9 +454,6 @@ function App() {
 
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedOfflineLink, setCopiedOfflineLink] = useState(false);
-
-  // A-Z filter
-  const [selectedLetter, setSelectedLetter] = useState(null);
 
   // Font
   const [displayFont, setDisplayFont] = useState(() => localStorage.getItem('displayFont') || FONTS[0].value);
@@ -608,36 +488,21 @@ function App() {
   const lastImageSizeSyncRef = useRef({ initialized: false, size: '' });
   const lastBibleFontSyncRef = useRef({ initialized: false, font: '', size: '', refOnly: false, verseKey: '' });
 
-  // Add Song Modal
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [addTitle, setAddTitle] = useState('');
-  const [addMode, setAddMode] = useState('manual'); // 'manual' | 'auto'
-  const [manualStanzas, setManualStanzas] = useState(['']);
-  const [autoText, setAutoText] = useState('');
-  const [addSaving, setAddSaving] = useState(false);
-  const [addError, setAddError] = useState('');
-
   const sqliteEnabled = Capacitor.isNativePlatform();
   const sqliteReadyRef = useRef(false);
 
-  // Favorites & Offline Cache
-  const [favorites, setFavorites] = useState(() => {
-    const parsed = readJsonLocalStorageSafely('worship_favorites', [], { maxChars: 40000 });
-    return Array.isArray(parsed) ? parsed : [];
-  });
-  const [recentSongs, setRecentSongs] = useState(() => {
-    const parsed = readJsonLocalStorageSafely('worship_recent_songs', [], { maxChars: 40000 });
-    return Array.isArray(parsed) ? parsed : [];
-  });
+  // Offline Cache
   const [offlineCache, setOfflineCache] = useState(() => {
     return readOfflineCacheFromLocalStorage();
   });
+
   const [pendingSyncQueue, setPendingSyncQueue] = useState(() => {
     const parsed = readJsonLocalStorageSafely('worship_pending_sync_queue', [], { maxChars: 60000 });
     return Array.isArray(parsed) ? parsed : [];
   });
   const [syncState, setSyncState] = useState({ syncing: false, lastRun: null, lastError: '' });
   const [offlineDownloadState, setOfflineDownloadState] = useState({ downloading: false, downloaded: 0, total: null, lastError: '', phase: 'idle' });
+  const [syncProgress, setSyncProgress] = useState({ active: false, phase: 'idle', downloaded: 0, total: null, message: '' });
   const [storageState, setStorageState] = useState({ permission: 'unknown', loaded: false, lastSavedAt: null, lastError: '', directory: 'Data' });
   const [localSnapshotSavedAt, setLocalSnapshotSavedAt] = useState(() => {
     const parsed = readJsonLocalStorageSafely(LOCAL_DATA_SNAPSHOT_KEY, {}, { maxChars: 120000 });
@@ -774,58 +639,6 @@ function App() {
         lastError: `SQLite delete failed: ${err?.message || err}`
       }));
     }
-  }, [sqliteEnabled]);
-
-  useEffect(() => {
-    if (!sqliteEnabled) return;
-    let cancelled = false;
-
-    const loadSqlite = async () => {
-      try {
-        const ok = await initOfflineSqlite();
-        if (!ok) return;
-
-        const songs = await loadOfflineSongs();
-        if (cancelled) return;
-
-        if (songs.length > 0) {
-          const map = {};
-          for (const song of songs) {
-            map[song.id] = song;
-          }
-          setOfflineCache(map);
-        } else {
-          const localCache = offlineCacheRef.current || {};
-          const localList = Object.values(localCache);
-          if (localList.length) {
-            await bulkUpsertOfflineSongs(localList);
-          }
-        }
-
-        sqliteReadyRef.current = true;
-        setStorageState(prev => ({
-          ...prev,
-          loaded: true,
-          directory: 'SQLite',
-          permission: 'app-data-only',
-          lastError: ''
-        }));
-      } catch (err) {
-        if (!cancelled) {
-          sqliteReadyRef.current = false;
-          setStorageState(prev => ({
-            ...prev,
-            lastError: `SQLite init failed: ${err?.message || err}`
-          }));
-        }
-      }
-    };
-
-    loadSqlite();
-
-    return () => {
-      cancelled = true;
-    };
   }, [sqliteEnabled]);
 
   const writeLocalStorage = useCallback((key, value, label = 'local storage') => {
@@ -1125,15 +938,12 @@ function App() {
   // Persist settings
   useEffect(() => { writeLocalStorage('activeTab', activeTab, 'active tab'); }, [activeTab, writeLocalStorage]);
   useEffect(() => { writeLocalStorage('tvRoomCode', roomCode, 'room code'); }, [roomCode, writeLocalStorage]);
-  useEffect(() => { writeLocalStorage('tabSearchState', JSON.stringify(tabSearch), 'search state'); }, [tabSearch, writeLocalStorage]);
   useEffect(() => { writeLocalStorage('deviceCode', deviceCode, 'device code'); }, [deviceCode, writeLocalStorage]);
   useEffect(() => {
     if (userName.trim()) {
       writeLocalStorage('presenterUserName', userName.trim(), 'user profile');
     }
   }, [userName, writeLocalStorage]);
-  useEffect(() => { writeLocalStorage('worship_favorites', JSON.stringify(favorites), 'favorites'); }, [favorites, writeLocalStorage]);
-  useEffect(() => { writeLocalStorage('worship_recent_songs', JSON.stringify(recentSongs), 'recent songs'); }, [recentSongs, writeLocalStorage]);
   useEffect(() => {
     if (sqliteEnabled) {
       writeLocalStorage('worship_offline_cache', JSON.stringify({ _storedInSqlite: true, count: Object.keys(offlineCache || {}).length }), 'offline cache marker');
@@ -1192,8 +1002,6 @@ function App() {
   useEffect(() => {
     const snapshot = {
       savedAt: Date.now(),
-      favoritesCount: favorites.length,
-      recentSongsCount: recentSongs.length,
       offlineCacheCount: Object.keys(offlineCache || {}).length,
       pendingSyncCount: pendingSyncQueue.length,
       roomCode,
@@ -1210,7 +1018,7 @@ function App() {
     }
 
     setLocalSnapshotSavedAt(snapshot.savedAt);
-  }, [favorites, recentSongs, offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort, shouldStoreLargeDataInLocalStorage, writeLocalStorage, sqliteEnabled]);
+  }, [offlineCache, pendingSyncQueue, roomCode, userName, cleanedServerHost, cleanedServerPort, shouldStoreLargeDataInLocalStorage, writeLocalStorage, sqliteEnabled]);
 
   useEffect(() => {
     if (!nativeFileStorageEnabled) return;
@@ -1224,84 +1032,86 @@ function App() {
 
   const runPendingSync = useCallback(async () => {
     if (syncInProgressRef.current) return;
-    const queue = pendingQueueRef.current;
-    if (!queue.length) return;
     if (!navigator.onLine) return;
 
     syncInProgressRef.current = true;
-    setSyncState(prev => ({ ...prev, syncing: true, lastError: '' }));
+    setSyncState({ syncing: true, lastRun: null, lastError: '' });
 
-    const remaining = [];
     let firstError = '';
 
-    for (const item of queue) {
-      try {
-        const payload = {
-          title: item.title,
-          stanzas: item.stanzas,
-          sourceUrl: item.sourceUrl || null,
-          forceUpdate: item.forceUpdate
-        };
+    // 1. Push locally-queued songs up to Supabase
+    const queue = pendingQueueRef.current;
+    if (queue.length > 0) {
+      const remaining = [];
+      for (const item of queue) {
+        try {
+          const payload = {
+            title: item.title,
+            stanzas: item.stanzas,
+            sourceUrl: item.sourceUrl || null,
+            forceUpdate: item.forceUpdate,
+          };
+          if (item.songId) payload.songId = item.songId;
 
-        if (item.songId) payload.songId = item.songId;
+          const res = await axios.post(`${apiBase}/save_song`, payload);
+          const syncedSongId = res?.data?.songId;
 
-        const res = await axios.post(`${apiBase}/save_song`, payload);
-        const syncedSongId = res?.data?.songId;
-
-        if (item.localId && syncedSongId && item.localId !== syncedSongId) {
-          const existingEntry = offlineCacheRef.current[item.localId];
-          setOfflineCache(prev => {
-            const localEntry = prev[item.localId];
-            if (!localEntry) return prev;
-            const next = { ...prev };
-            delete next[item.localId];
-            next[syncedSongId] = { ...localEntry, id: syncedSongId, pendingSync: false };
-            return next;
-          });
-
-          if (existingEntry) {
-            upsertOfflineSongSqlite({
-              ...existingEntry,
-              id: syncedSongId,
-              pendingSync: false
+          if (item.localId && syncedSongId && item.localId !== syncedSongId) {
+            const existingEntry = offlineCacheRef.current[item.localId];
+            setOfflineCache(prev => {
+              const localEntry = prev[item.localId];
+              if (!localEntry) return prev;
+              const next = { ...prev };
+              delete next[item.localId];
+              next[syncedSongId] = { ...localEntry, id: syncedSongId, pendingSync: false };
+              return next;
             });
-          }
-          deleteOfflineSongSqlite(item.localId);
-
-          setFavorites(prev => prev.map(f => (
-            f.id === item.localId ? { ...f, id: syncedSongId, source: 'db' } : f
-          )));
-
-          setSelectedSong(prev => (
-            prev && prev.id === item.localId
-              ? { ...prev, id: syncedSongId, isCached: true }
-              : prev
-          ));
-        } else if (item.localId) {
-          const existingEntry = offlineCacheRef.current[item.localId];
-          setOfflineCache(prev => {
-            if (!prev[item.localId]) return prev;
-            return {
-              ...prev,
-              [item.localId]: { ...prev[item.localId], pendingSync: false }
-            };
-          });
-          if (existingEntry) {
-            upsertOfflineSongSqlite({
-              ...existingEntry,
-              pendingSync: false
+            if (existingEntry) {
+              upsertOfflineSongSqlite({ ...existingEntry, id: syncedSongId, pendingSync: false });
+            }
+            deleteOfflineSongSqlite(item.localId);
+            setSelectedSong(prev => prev?.id === item.localId ? { ...prev, id: syncedSongId, isCached: true } : prev);
+          } else if (item.localId) {
+            const existingEntry = offlineCacheRef.current[item.localId];
+            setOfflineCache(prev => {
+              if (!prev[item.localId]) return prev;
+              return { ...prev, [item.localId]: { ...prev[item.localId], pendingSync: false } };
             });
+            if (existingEntry) upsertOfflineSongSqlite({ ...existingEntry, pendingSync: false });
           }
+        } catch (err) {
+          if (!firstError) firstError = err.response?.data?.details || err.message || 'Push failed';
+          remaining.push(item);
         }
-      } catch (err) {
-        if (!firstError) {
-          firstError = err.response?.data?.details || err.message || 'Sync failed';
-        }
-        remaining.push(item);
       }
+      setPendingSyncQueue(remaining);
     }
 
-    setPendingSyncQueue(remaining);
+    // 2. Pull new/changed songs down from Supabase
+    try {
+      const { songs, stats } = await syncSongs(supabase, {
+        force: false,
+        onProgress: ({ phase, downloaded, total }) => {
+          let message = '';
+          if (phase === 'counting') message = 'Checking for updates...';
+          else if (phase === 'downloading') message = total ? `Downloading ${downloaded}/${total}...` : `Downloading ${downloaded}...`;
+          else if (phase === 'saving') message = `Saving ${downloaded}/${total ?? '?'}...`;
+          else if (phase === 'syncing') message = 'Syncing updates...';
+          else if (phase === 'checking') message = 'Checking for updates...';
+          setSyncProgress({ active: true, phase, downloaded: downloaded ?? 0, total: total ?? null, message });
+        },
+      });
+      if (songs.length > 0) {
+        const map = {};
+        for (const song of songs) { map[song.id] = song; }
+        setOfflineCache(map);
+      }
+      console.log(`[Sync] Manual pull: +${stats.added} updated:${stats.updated} deleted:${stats.deleted}`);
+    } catch (err) {
+      if (!firstError) firstError = err.message || 'Pull failed';
+    }
+
+    setSyncProgress({ active: false, phase: 'done', downloaded: 0, total: null, message: '' });
     setSyncState({ syncing: false, lastRun: Date.now(), lastError: firstError });
     syncInProgressRef.current = false;
   }, [apiBase, upsertOfflineSongSqlite, deleteOfflineSongSqlite]);
@@ -1309,110 +1119,48 @@ function App() {
   const downloadAllSongsForOffline = useCallback(async (options = {}) => {
     const { skipConfirm = false } = options;
     if (!skipConfirm) {
-      const confirmed = window.confirm('Do you want to download all songs to local app files for offline access?');
+      const confirmed = window.confirm('Re-download all songs from the server?');
       if (!confirmed) return;
     }
 
     if (!navigator.onLine) {
-      alert('Internet/mobile data is required for initial download.');
+      alert('Internet/mobile data is required for this download.');
       return;
     }
 
     setOfflineDownloadState({ downloading: true, downloaded: 0, total: null, lastError: '', phase: 'starting' });
 
     try {
-      let totalCount = null;
-      try {
-        const { count, error: countError } = await supabase
-          .from('songs')
-          .select('id', { count: 'exact', head: true });
-        if (!countError && Number.isFinite(count)) {
-          totalCount = count;
-        }
-      } catch {
-        totalCount = null;
+      const { songs, stats } = await syncSongs(supabase, {
+        force: true,
+        onProgress: ({ phase, downloaded, total }) => {
+          setOfflineDownloadState(prev => ({
+            ...prev,
+            downloaded: downloaded ?? prev.downloaded,
+            total: total ?? prev.total,
+            phase: phase === 'downloading' ? 'fetching' : phase,
+          }));
+        },
+      });
+
+      if (songs.length > 0) {
+        const map = {};
+        for (const song of songs) { map[song.id] = song; }
+        setOfflineCache(map);
       }
 
-      setOfflineDownloadState(prev => ({
-        ...prev,
-        total: totalCount,
-        phase: 'fetching'
-      }));
-
-      const PAGE_SIZE = 250;
-      let page = 0;
-      let totalDownloaded = 0;
-      const merged = { ...offlineCacheRef.current };
-
-      // Fetch songs in pages to avoid large payload spikes.
-      while (true) {
-        const from = page * PAGE_SIZE;
-        const to = from + PAGE_SIZE - 1;
-        const { data: songs, error: songsError } = await supabase
-          .from('songs')
-          .select('id, title, source_url')
-          .order('title', { ascending: true })
-          .range(from, to);
-
-        if (songsError) throw songsError;
-        if (!songs || songs.length === 0) break;
-
-        const ids = songs.map(song => song.id);
-        const { data: lyricsRows, error: lyricsError } = await supabase
-          .from('lyrics')
-          .select('song_id, stanza_number, lyrics')
-          .in('song_id', ids)
-          .order('stanza_number', { ascending: true });
-
-        if (lyricsError) throw lyricsError;
-
-        const lyricsBySong = {};
-        for (const row of lyricsRows || []) {
-          if (!lyricsBySong[row.song_id]) lyricsBySong[row.song_id] = [];
-          lyricsBySong[row.song_id].push(row.lyrics);
-        }
-
-        for (const song of songs) {
-          merged[song.id] = {
-            id: song.id,
-            title: song.title,
-            stanzas: lyricsBySong[song.id] || [],
-            source: 'db',
-            pendingSync: false,
-            sourceUrl: song.source_url || null
-          };
-        }
-
-        totalDownloaded += songs.length;
-        setOfflineDownloadState(prev => ({
-          ...prev,
-          downloaded: totalDownloaded,
-          phase: 'fetching'
-        }));
-        page += 1;
-
-        if (songs.length < PAGE_SIZE) break;
-      }
-
-      setOfflineDownloadState(prev => ({ ...prev, phase: 'saving' }));
-      setOfflineCache(merged);
-      await bulkUpsertOfflineSongsSqlite(Object.values(merged));
-      setOfflineDownloadState({ downloading: false, downloaded: totalDownloaded, total: totalCount ?? totalDownloaded, lastError: '', phase: 'done' });
-      alert(`Downloaded ${totalDownloaded} songs for offline access.`);
+      setOfflineDownloadState({ downloading: false, downloaded: stats.added, total: stats.added, lastError: '', phase: 'done' });
+      alert(`Downloaded ${stats.added} songs for offline access.`);
     } catch (err) {
       setOfflineDownloadState(prev => ({
         ...prev,
         downloading: false,
-        lastError: err.message || 'Failed to download songs',
-        phase: 'error'
+        lastError: err.message || 'Download failed',
+        phase: 'error',
       }));
       alert('Offline download failed: ' + (err.message || 'Unknown error'));
-    } finally {
-      setOfflineDownloadState(prev => (
-        prev.downloading ? { ...prev, downloading: false, phase: prev.lastError ? 'error' : 'done' } : prev
-      ));
     }
-  }, [ensureStoragePermission, bulkUpsertOfflineSongsSqlite]);
+  }, []);
 
   useEffect(() => {
     if (showProfileSetup) return;
@@ -1875,8 +1623,6 @@ function App() {
     }
     if (!showHomeCards) {
       setShowHomeCards(true);
-      setResults([]);
-      setSelectedLetter(null);
       return true;
     }
     return false;
@@ -1909,8 +1655,6 @@ function App() {
 
         if (!showHomeCards) {
           setShowHomeCards(true);
-          setResults([]);
-          setSelectedLetter(null);
           return;
         }
 
@@ -1962,169 +1706,6 @@ function App() {
     }
     setSelectedSong(null);
     setActiveStanza(null);
-  };
-
-  // ---- Search ----
-  const handleSearch = async () => {
-    const searchQuery = tabSearch[activeTab] || '';
-    if (activeTab === 'images' || activeTab === 'bible') { setResults([]); return; }
-    if (activeTab === 'favorites') { setResults(favorites); return; }
-    if (activeTab === 'recents') {
-      if (!searchQuery.trim()) {
-        setResults(recentSongs);
-      } else {
-        const tokens = searchQuery.toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
-        const filtered = recentSongs.filter(item => {
-          const title = String(item.title || '').toLowerCase();
-          return tokens.every(t => title.includes(t));
-        });
-        setResults(rankByRelatedness(filtered, searchQuery));
-      }
-      return;
-    }
-    if (!searchQuery.trim()) { setResults([]); return; }
-    setLoading(true);
-    setResults([]);
-    setSelectedLetter(null);
-    try {
-      if (activeTab === 'db') {
-        const rawQuery = searchQuery.trim();
-        const tokens = rawQuery.toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean);
-        let queryBuilder = supabase.from('songs').select('id, title');
-
-        if (tokens.length <= 1) {
-          const token = tokens[0] || rawQuery;
-          queryBuilder = queryBuilder.ilike('title', `${token}%`);
-        } else {
-          queryBuilder = queryBuilder.ilike('title', `${rawQuery}%`);
-        }
-
-        const { data, error } = await queryBuilder.limit(250);
-        if (error) throw error;
-        const mapped = data.map(item => ({ id: item.id, title: item.title, source: 'db' }));
-        if (mapped.length === 0 && tokens.length > 0) {
-          const cachedSongs = Object.values(offlineCache);
-          const localMatches = cachedSongs.filter(s => {
-            const title = (s.title || '').toLowerCase();
-            if (tokens.length <= 1) return title.startsWith(tokens[0]);
-            return title.startsWith(rawQuery.toLowerCase());
-          });
-          const fallback = localMatches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true }));
-          setResults(rankByRelatedness(fallback, searchQuery).slice(0, 100));
-        } else {
-          setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
-        }
-      } else {
-        const res = await axios.get(`${apiBase}/search?q=${encodeURIComponent(searchQuery)}`);
-        const mapped = res.data.map(item => ({ url: item.url, title: item.title, source: 'web' }));
-        setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
-      }
-    } catch (err) {
-      console.error('Search error:', err);
-      if (activeTab === 'db') {
-        const rawQuery = searchQuery.trim().toLowerCase();
-        const tokens = rawQuery.split(/\s+/).filter(Boolean);
-        const cachedSongs = Object.values(offlineCache);
-        const localMatches = cachedSongs.filter(s => {
-          const title = (s.title || '').toLowerCase();
-          if (!tokens.length) return false;
-          if (tokens.length <= 1) return title.startsWith(tokens[0]);
-          return title.startsWith(rawQuery);
-        });
-        const mapped = localMatches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true }));
-        setResults(rankByRelatedness(mapped, searchQuery).slice(0, 100));
-      } else {
-        alert('Search failed. Check connection.');
-      }
-    } finally { setLoading(false); }
-  };
-
-  const handleLetterFilter = async (letter) => {
-    setSelectedLetter(letter);
-    setTabSearch(prev => ({ ...prev, db: '' }));
-    setLoading(true);
-    setResults([]);
-    try {
-      const { data, error } = await supabase.from('songs').select('id, title').ilike('title', `${letter}%`).order('title', { ascending: true }).limit(100);
-      if (error) throw error;
-      setResults(data.map(item => ({ id: item.id, title: item.title, source: 'db' })));
-    } catch {
-      // Offline fallback
-      const cachedSongs = Object.values(offlineCache);
-      const matches = cachedSongs.filter(s => s.title.toUpperCase().startsWith(letter));
-      setResults(matches.map(item => ({ id: item.id, title: item.title, source: 'db', offline: true })));
-    } finally { setLoading(false); }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'favorites' || activeTab === 'recents') handleSearch();
-  }, [activeTab, favorites, recentSongs]);
-
-  // Live search for DB tab while typing.
-  useEffect(() => {
-    if (activeTab !== 'db') return;
-    if (selectedLetter) return;
-
-    const query = tabSearch.db || '';
-    if (!query.trim()) {
-      setResults([]);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      handleSearch();
-    }, 220);
-
-    return () => clearTimeout(timer);
-  }, [activeTab, tabSearch.db, selectedLetter]);
-
-  // ---- Song Select ----
-  const handleSongSelect = async (songMetadata) => {
-    setLoading(true);
-
-    const recentItem = {
-      title: songMetadata.title,
-      source: songMetadata.source,
-      id: songMetadata.id,
-      url: songMetadata.url,
-      offline: !!songMetadata.offline
-    };
-    setRecentSongs(prev => {
-      const keyOf = (item) => `${item.source || ''}:${item.id || item.url || item.title || ''}`;
-      const targetKey = keyOf(recentItem);
-      const deduped = prev.filter(item => keyOf(item) !== targetKey);
-      return [recentItem, ...deduped].slice(0, 20);
-    });
-
-    try {
-      if (songMetadata.source === 'db') {
-        let stanzasData = [];
-        // Offline cache first
-        if (offlineCache[songMetadata.id]) {
-          stanzasData = offlineCache[songMetadata.id].stanzas;
-        } else {
-          const { data, error } = await supabase.from('lyrics').select('lyrics').eq('song_id', songMetadata.id).order('stanza_number', { ascending: true });
-          if (error) throw error;
-          stanzasData = data.map(item => item.lyrics);
-          // Cache it
-          const cacheEntry = { id: songMetadata.id, title: songMetadata.title, stanzas: stanzasData, source: 'db' };
-          setOfflineCache(prev => ({ ...prev, [songMetadata.id]: cacheEntry }));
-          upsertOfflineSongSqlite(cacheEntry);
-        }
-        setSelectedSong({ id: songMetadata.id, title: songMetadata.title, stanzas: stanzasData, isCached: true });
-      } else {
-        const res = await axios.get(`${apiBase}/lyrics?url=${encodeURIComponent(songMetadata.url)}`);
-        setSelectedSong({ url: songMetadata.url, title: songMetadata.title, stanzas: res.data, isCached: false });
-      }
-      window.history.pushState({ appView: 'song' }, '');
-    } catch {
-      if (offlineCache[songMetadata.id]) {
-        const c = offlineCache[songMetadata.id];
-        setSelectedSong({ id: c.id, title: c.title, stanzas: c.stanzas, isCached: true });
-      } else {
-        alert('Error fetching lyrics. Song not available offline.');
-      }
-    } finally { setLoading(false); }
   };
 
   useEffect(() => {
@@ -2213,35 +1794,6 @@ function App() {
       alert('Saved offline. It will sync automatically when data connection is available.');
     } finally {
       setSavingEdits(false);
-    }
-  };
-
-  const handleSaveWebResultToDb = async (songItem) => {
-    const saveKey = songItem.url || songItem.title;
-    setSavingWebSongs(prev => ({ ...prev, [saveKey]: true }));
-
-    try {
-      const lyricRes = await axios.get(`${apiBase}/lyrics?url=${encodeURIComponent(songItem.url)}`);
-      const stanzas = (lyricRes.data || []).map(s => String(s || '').trim()).filter(Boolean);
-      if (stanzas.length === 0) throw new Error('No stanzas found to save');
-
-      const saveRes = await axios.post(`${apiBase}/save_song`, {
-        title: songItem.title,
-        stanzas,
-        sourceUrl: songItem.url
-      });
-
-      const newId = saveRes.data.songId;
-      if (newId) {
-        const cacheEntry = { id: newId, title: songItem.title, stanzas, source: 'db' };
-        setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
-        upsertOfflineSongSqlite(cacheEntry);
-      }
-      alert(`Saved "${songItem.title}" to DB.`);
-    } catch (err) {
-      alert('Save to DB failed: ' + (err.response?.data?.details || err.message));
-    } finally {
-      setSavingWebSongs(prev => ({ ...prev, [saveKey]: false }));
     }
   };
 
@@ -2853,20 +2405,12 @@ function App() {
     setShowProfileSetup(false);
   };
 
-  const clearLocalSearchCache = () => {
-    setTabSearch({ db: '', web: '', favorites: '', images: '', bible: '', recents: '' });
-    setResults([]);
-    setSelectedLetter(null);
-  };
-
   const openHomeCard = (tabKey) => {
     if (tabKey === 'settings') {
       openSettingsPage();
       return;
     }
     setActiveTab(tabKey);
-    setResults([]);
-    setSelectedLetter(null);
     setShowHomeCards(false);
   };
 
@@ -2911,61 +2455,6 @@ function App() {
     }).catch(() => alert('Could not copy link.'));
   };
 
-  // ---- Favorites ----
-  const toggleFavorite = (e, songItem) => {
-    e.stopPropagation();
-    const isFav = favorites.some(f => f.title === songItem.title);
-    setFavorites(isFav ? favorites.filter(f => f.title !== songItem.title) : [...favorites, songItem]);
-  };
-
-  // ---- Add Song ----
-  const openAddModal = () => {
-    setAddTitle('');
-    setAddMode('manual');
-    setManualStanzas(['']);
-    setAutoText('');
-    setAddError('');
-    setShowAddModal(true);
-  };
-
-  const addManualStanza = () => setManualStanzas(prev => [...prev, '']);
-  const removeManualStanza = (i) => setManualStanzas(prev => prev.filter((_, idx) => idx !== i));
-  const updateManualStanza = (i, val) => setManualStanzas(prev => prev.map((s, idx) => idx === i ? val : s));
-
-  const handleSaveSong = async () => {
-    if (!addTitle.trim()) { setAddError('Please enter a song title.'); return; }
-    let stanzas = [];
-    if (addMode === 'manual') {
-      stanzas = manualStanzas.map(s => s.trim()).filter(s => s.length > 0);
-    } else {
-      stanzas = autoText.split(/\n\s*\n/).map(s => s.trim()).filter(s => s.length > 0);
-    }
-    if (stanzas.length === 0) { setAddError('Add at least one stanza.'); return; }
-    setAddSaving(true);
-    setAddError('');
-    try {
-      const res = await axios.post(`${apiBase}/save_song`, { title: addTitle.trim(), stanzas });
-      const newId = res.data.songId;
-      // Cache locally too
-      const cacheEntry = { id: newId, title: addTitle.trim(), stanzas, source: 'db' };
-      setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
-      upsertOfflineSongSqlite(cacheEntry);
-      setShowAddModal(false);
-      alert(`✅ "${addTitle.trim()}" saved with ${stanzas.length} stanza(s)!`);
-    } catch {
-      const localId = persistLocallyAndQueue({
-        title: addTitle.trim(),
-        stanzas,
-        sourceUrl: null,
-        songId: null,
-        forceUpdate: false
-      });
-      setShowAddModal(false);
-      setAddError('');
-      alert(`Saved offline as ${localId}. It will sync automatically when data connection is available.`);
-    } finally { setAddSaving(false); }
-  };
-
   // ---- Page Rendering ----
   if (showSettings) {
     return (
@@ -3007,7 +2496,7 @@ function App() {
         formatBytes={formatBytes}
         localSnapshotSavedAt={localSnapshotSavedAt}
         NATIVE_FILE_STORAGE_ENABLED_IN_BUILD={NATIVE_FILE_STORAGE_ENABLED_IN_BUILD}
-        clearLocalSearchCache={clearLocalSearchCache}
+        syncProgress={syncProgress}
       />
     );
   }
@@ -3029,19 +2518,20 @@ function App() {
         saveEditedSongToDb={saveEditedSongToDb}
         savingEdits={savingEdits}
         FONTS={FONTS}
-        showFontPicker={showFontPicker}
-        setShowFontPicker={setShowFontPicker}
         setDisplayFont={setDisplayFont}
         displayFontSize={displayFontSize}
         setDisplayFontSize={setDisplayFontSize}
-        handleSaveWebResultToDb={handleSaveWebResultToDb}
-        savingWebSongs={savingWebSongs}
         presentLyrics={presentLyrics}
         updateEditableStanza={updateEditableStanza}
         removeEditableStanza={removeEditableStanza}
         clearScreen={clearScreen}
         onBack={handleSongPageBack}
         openSettingsPage={openSettingsPage}
+        songQueue={songQueue}
+        onQueueNavigate={(songMetadata, newIndex) => {
+          setSongQueue(q => ({ ...q, index: newIndex }));
+          if (loadSongRef.current) loadSongRef.current(songMetadata, newIndex);
+        }}
       />
     );
   }
@@ -3105,42 +2595,24 @@ function App() {
       setDisplayFont={setDisplayFont}
       displayFontSize={displayFontSize}
       setDisplayFontSize={setDisplayFontSize}
-      tabSearch={tabSearch}
-      setTabSearch={setTabSearch}
-      handleSearch={handleSearch}
-      loading={loading}
-      openAddModal={openAddModal}
-      selectedLetter={selectedLetter}
-      setSelectedLetter={setSelectedLetter}
-      setResults={setResults}
-      handleLetterFilter={handleLetterFilter}
-      results={results}
-      favorites={favorites}
+      apiBase={apiBase}
+      sqliteEnabled={sqliteEnabled}
       offlineCache={offlineCache}
-      handleSongSelect={handleSongSelect}
-      handleSaveWebResultToDb={handleSaveWebResultToDb}
-      savingWebSongs={savingWebSongs}
-      toggleFavorite={toggleFavorite}
-      showAddModal={showAddModal}
-      setShowAddModal={setShowAddModal}
-      addTitle={addTitle}
-      setAddTitle={setAddTitle}
-      addMode={addMode}
-      setAddMode={setAddMode}
-      manualStanzas={manualStanzas}
-      updateManualStanza={updateManualStanza}
-      removeManualStanza={removeManualStanza}
-      addManualStanza={addManualStanza}
-      autoText={autoText}
-      setAutoText={setAutoText}
-      addError={addError}
-      handleSaveSong={handleSaveSong}
-      addSaving={addSaving}
+      setOfflineCache={setOfflineCache}
+      upsertOfflineSongSqlite={upsertOfflineSongSqlite}
+      persistLocallyAndQueue={persistLocallyAndQueue}
+      setStorageState={setStorageState}
+      writeLocalStorage={writeLocalStorage}
+      onSongSelect={(song, results, index) => {
+        if (results && index !== undefined) setSongQueue({ results, index });
+        setSelectedSong(song);
+      }}
       showProfileSetup={showProfileSetup}
       profileNameInput={profileNameInput}
       setProfileNameInput={setProfileNameInput}
       completeProfileSetup={completeProfileSetup}
       registerBibleBackHandler={(fn) => { bibleBackHandlerRef.current = fn; }}
+      registerLoadSong={(fn) => { loadSongRef.current = fn; }}
     />
   );
 }

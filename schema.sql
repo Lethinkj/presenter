@@ -36,6 +36,55 @@ CREATE POLICY "Allow public insert access on lyrics" ON public.lyrics FOR INSERT
 CREATE POLICY "Allow public update access on lyrics" ON public.lyrics FOR UPDATE USING (true);
 CREATE POLICY "Allow public delete access on lyrics" ON public.lyrics FOR DELETE USING (true);
 
+-- ============================================================
+-- Sync support: updated_at + is_deleted + auto-update triggers
+-- Run this section once against your Supabase project to enable
+-- offline-first incremental sync.
+-- ============================================================
+
+-- 1. Add columns to songs
+ALTER TABLE public.songs ADD COLUMN IF NOT EXISTS
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL;
+
+ALTER TABLE public.songs ADD COLUMN IF NOT EXISTS
+  is_deleted BOOLEAN DEFAULT false NOT NULL;
+
+-- 2. Fast index for incremental sync queries (gt updated_at filter)
+CREATE INDEX IF NOT EXISTS songs_updated_at_idx ON public.songs (updated_at ASC);
+
+-- 3. Auto-bump updated_at on any songs row update
+CREATE OR REPLACE FUNCTION public.songs_set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = timezone('utc'::text, now());
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS songs_updated_at_trigger ON public.songs;
+CREATE TRIGGER songs_updated_at_trigger
+  BEFORE UPDATE ON public.songs
+  FOR EACH ROW EXECUTE FUNCTION public.songs_set_updated_at();
+
+-- 4. Bump songs.updated_at whenever a lyrics row changes so incremental
+--    sync picks up lyric-only edits (not just title changes).
+CREATE OR REPLACE FUNCTION public.lyrics_bump_song_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.songs
+  SET updated_at = timezone('utc'::text, now())
+  WHERE id = COALESCE(NEW.song_id, OLD.song_id);
+  RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS lyrics_bump_song_updated_at_trigger ON public.lyrics;
+CREATE TRIGGER lyrics_bump_song_updated_at_trigger
+  AFTER INSERT OR UPDATE OR DELETE ON public.lyrics
+  FOR EACH ROW EXECUTE FUNCTION public.lyrics_bump_song_updated_at();
+
+-- ============================================================
+
 -- Create the `heartbeat_logs` table for daily service heartbeat tracking
 CREATE TABLE IF NOT EXISTS public.heartbeat_logs (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

@@ -1,4 +1,5 @@
 import { FaArrowLeft, FaDownload, FaShareAlt, FaTrash } from 'react-icons/fa';
+import { Capacitor } from '@capacitor/core';
 
 export default function SettingsPage({
   closeSettingsPage,
@@ -38,7 +39,8 @@ export default function SettingsPage({
   formatBytes,
   localSnapshotSavedAt,
   NATIVE_FILE_STORAGE_ENABLED_IN_BUILD,
-  clearLocalSearchCache
+  clearLocalSearchCache,
+  syncProgress,
 }) {
   return (
     <div className="app-container has-header">
@@ -177,101 +179,109 @@ export default function SettingsPage({
 
         <div className="stanza-card">
           <h3 style={{ margin: 0 }}>Offline Sync</h3>
-          <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
-            Pending items: {pendingSyncQueue.length}
-          </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Status: {syncState.syncing ? 'Syncing...' : 'Idle'}
-          </div>
-          {syncState.lastRun && (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Last run: {new Date(syncState.lastRun).toLocaleString()}
+          {!Capacitor.isNativePlatform() ? (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 8 }}>
+              Offline sync requires the native mobile app. On web, songs are fetched directly from the server on each search.
             </div>
-          )}
-          {syncState.lastError && (
-            <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
-              Last error: {syncState.lastError}
-            </div>
-          )}
-          <button
-            className="btn-save"
-            style={{ marginTop: 10 }}
-            onClick={runPendingSync}
-            disabled={syncState.syncing || pendingSyncQueue.length === 0}
-          >
-            {syncState.syncing ? 'Syncing...' : 'Sync Now'}
-          </button>
-          <button
-            className="btn-save"
-            style={{ marginTop: 10 }}
-            onClick={downloadAllSongsForOffline}
-            disabled={offlineDownloadState.downloading}
-          >
-            <FaDownload style={{ marginRight: 6 }} />
-            {offlineDownloadState.downloading
-              ? (offlineDownloadState.phase === 'saving'
-                ? 'Saving offline data...'
-                : `Downloading... ${offlineDownloadState.downloaded}${offlineDownloadState.total ? ` / ${offlineDownloadState.total}` : ''}`)
-              : 'Download All Songs Offline'}
-          </button>
-          {offlineDownloadState.downloading && (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
-              {offlineDownloadState.phase === 'saving'
-                ? 'Finalizing local cache...'
-                : `Downloaded: ${offlineDownloadState.downloaded}${offlineDownloadState.total ? ` / ${offlineDownloadState.total}` : ''}`}
-            </div>
-          )}
-          {offlineDownloadState.lastError && (
-            <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
-              Download error: {offlineDownloadState.lastError}
-            </div>
+          ) : (
+            <>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 8 }}>
+                Status: {syncState.syncing ? 'Syncing...' : 'Idle'}
+              </div>
+              {syncState.lastRun && (
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
+                  Last sync: {new Date(syncState.lastRun).toLocaleString()}
+                </div>
+              )}
+              {syncState.lastError && (
+                <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
+                  Last error: {syncState.lastError}
+                </div>
+              )}
+              {syncState.syncing && syncProgress?.message && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: 5 }}>
+                    {syncProgress.message}
+                  </div>
+                  <div className="sync-settings-progress-track">
+                    <div
+                      className="sync-settings-progress-fill"
+                      style={{
+                        width: syncProgress.total
+                          ? `${Math.min(100, Math.round((syncProgress.downloaded / syncProgress.total) * 100))}%`
+                          : '100%',
+                        animation: syncProgress.total ? 'none' : 'sync-indeterminate 1.4s ease-in-out infinite',
+                      }}
+                    />
+                  </div>
+                  {syncProgress.total > 0 && (
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', marginTop: 4, textAlign: 'right' }}>
+                      {syncProgress.downloaded} / {syncProgress.total}
+                    </div>
+                  )}
+                </div>
+              )}
+              <button
+                className="btn-save"
+                style={{ marginTop: 10 }}
+                onClick={runPendingSync}
+                disabled={syncState.syncing}
+              >
+                {syncState.syncing ? 'Syncing...' : 'Sync Now'}
+              </button>
+              <button
+                className="btn-save"
+                style={{ marginTop: 10 }}
+                onClick={downloadAllSongsForOffline}
+                disabled={offlineDownloadState.downloading}
+              >
+                <FaDownload style={{ marginRight: 6 }} />
+                {offlineDownloadState.downloading
+                  ? (offlineDownloadState.phase === 'saving'
+                    ? 'Saving offline data...'
+                    : `Downloading... ${offlineDownloadState.downloaded}${offlineDownloadState.total ? ` / ${offlineDownloadState.total}` : ''}`)
+                  : 'Download All Songs Offline'}
+              </button>
+              {offlineDownloadState.downloading && (
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
+                  {offlineDownloadState.phase === 'saving'
+                    ? 'Finalizing local cache...'
+                    : `Downloaded: ${offlineDownloadState.downloaded}${offlineDownloadState.total ? ` / ${offlineDownloadState.total}` : ''}`}
+                </div>
+              )}
+              {offlineDownloadState.lastError && (
+                <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
+                  Download error: {offlineDownloadState.lastError}
+                </div>
+              )}
+            </>
           )}
         </div>
 
         <div className="stanza-card">
-          <h3 style={{ margin: 0 }}>Device File Storage</h3>
+          <h3 style={{ margin: 0 }}>Local Database</h3>
           <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
-            Permission: {storageState.permission}
+            Songs stored: {storageUsageSummary.offlineSongCount}
           </div>
           <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Enabled: {nativeFileStorageEnabled ? 'Yes' : 'No'}
+            Storage: {storageState.directory} · {formatBytes(storageUsageSummary.totalBytes)}
           </div>
           <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Loaded: {storageState.loaded ? 'Yes' : 'No'}
+            Ready: {storageState.loaded ? 'Yes' : 'No'}
           </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Folder: {OFFLINE_STORAGE_FOLDER} ({storageState.directory})
-          </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Cached songs: {storageUsageSummary.offlineSongCount}
-          </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Pending sync: {storageUsageSummary.pendingCount}
-          </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Cache size est.: {formatBytes(storageUsageSummary.offlineBytes)} + {formatBytes(storageUsageSummary.queueBytes)} = {formatBytes(storageUsageSummary.totalBytes)}
-          </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-            Large data target: {storageUsageSummary.target}
-          </div>
-          {localSnapshotSavedAt && (
+          {syncState.lastRun && (
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Local data saved: {new Date(localSnapshotSavedAt).toLocaleString()}
+              Last synced: {new Date(syncState.lastRun).toLocaleString()}
             </div>
           )}
-          {storageState.lastSavedAt && (
+          {pendingSyncQueue.length > 0 && (
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 4 }}>
-              Last saved: {new Date(storageState.lastSavedAt).toLocaleString()}
+              Pending uploads: {pendingSyncQueue.length}
             </div>
           )}
           {storageState.lastError && (
             <div style={{ color: 'var(--error-color)', fontSize: '0.78rem', marginTop: 6 }}>
               Storage error: {storageState.lastError}
-            </div>
-          )}
-          {!NATIVE_FILE_STORAGE_ENABLED_IN_BUILD && (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 6 }}>
-              Native file storage is disabled in this build for crash safety.
             </div>
           )}
         </div>

@@ -5,21 +5,17 @@ import {
   FaGlobe,
   FaHistory,
   FaImage,
-  FaPlus,
-  FaRegStar,
-  FaSave,
-  FaSearch,
-  FaStar,
   FaStickyNote,
   FaWifi,
   FaCog,
-  FaStop
+  FaStop,
+  FaStar,
 } from 'react-icons/fa';
 import BiblePage from './BiblePage';
 import ImagePage from './ImagePage';
 import NotesPage from './NotesPage';
-import AddSongModal from './AddSongModal';
 import ProfileSetupModal from './ProfileSetupModal';
+import SongSearchPage from './SongSearchPage';
 
 export default function MainPage({
   userName,
@@ -73,37 +69,16 @@ export default function MainPage({
   setDisplayFont,
   displayFontSize,
   setDisplayFontSize,
-  tabSearch,
-  setTabSearch,
-  handleSearch,
-  loading,
-  openAddModal,
-  selectedLetter,
-  setSelectedLetter,
-  setResults,
-  handleLetterFilter,
-  results,
-  favorites,
+  apiBase,
+  sqliteEnabled,
   offlineCache,
-  handleSongSelect,
-  handleSaveWebResultToDb,
-  savingWebSongs,
-  toggleFavorite,
-  showAddModal,
-  setShowAddModal,
-  addTitle,
-  setAddTitle,
-  addMode,
-  setAddMode,
-  manualStanzas,
-  updateManualStanza,
-  removeManualStanza,
-  addManualStanza,
-  autoText,
-  setAutoText,
-  addError,
-  handleSaveSong,
-  addSaving,
+  setOfflineCache,
+  upsertOfflineSongSqlite,
+  persistLocallyAndQueue,
+  setStorageState,
+  writeLocalStorage,
+  onSongSelect,
+  registerLoadSong,
   showProfileSetup,
   profileNameInput,
   setProfileNameInput,
@@ -111,45 +86,6 @@ export default function MainPage({
   openSettingsPage,
   registerBibleBackHandler,
 }) {
-  const parseUrl = (value) => {
-    const raw = String(value || '').trim();
-    if (!raw) return null;
-    try {
-      return new URL(raw);
-    } catch {
-      try {
-        return new URL(`https://${raw}`);
-      } catch {
-        return null;
-      }
-    }
-  };
-
-  const unwrapSearchRedirect = (value) => {
-    const parsed = parseUrl(value);
-    if (!parsed) return String(value || '');
-
-    const host = parsed.hostname.toLowerCase();
-    const isDuckDuckGo = host === 'duckduckgo.com' || host.endsWith('.duckduckgo.com');
-    if (!isDuckDuckGo) return parsed.toString();
-
-    const wrapped = parsed.searchParams.get('uddg') || parsed.searchParams.get('u') || parsed.searchParams.get('rut');
-    if (!wrapped) return parsed.toString();
-
-    try {
-      return decodeURIComponent(wrapped);
-    } catch {
-      return wrapped;
-    }
-  };
-
-  const getWebDomain = (url) => {
-    const unwrapped = unwrapSearchRedirect(url);
-    const parsed = parseUrl(unwrapped);
-    if (!parsed) return 'Web';
-    return parsed.hostname.replace(/^www\./i, '') || 'Web';
-  };
-
   const homeCards = [
     { key: 'db', label: 'DB Search', icon: <FaDatabase /> },
     { key: 'web', label: 'Web Search', icon: <FaGlobe /> },
@@ -222,12 +158,14 @@ export default function MainPage({
           </div>
         </div>
       ) : (
-        <div className={`content-area ${activeTab === 'bible' ? 'bible-content-area' : ''}`}>
+        <div className={`content-area ${activeTab === 'bible' ? 'bible-content-area' : ''} ${activeTab !== 'bible' && activeTab !== 'images' && activeTab !== 'notes' ? 'song-content-area' : ''}`}>
           <div className="section-topbar">
-            <button className="back-btn" onClick={() => setShowHomeCards(true)}>
-              <FaArrowLeft />
-            </button>
-            <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
+            <div className="section-back-title">
+              <button className="back-btn" onClick={() => setShowHomeCards(true)}>
+                <FaArrowLeft />
+              </button>
+              <div className="section-title">{homeCards.find(c => c.key === activeTab)?.label || 'Section'}</div>
+            </div>
             <div className="section-actions">
               {activeTab === 'bible' && !!activeBibleVerseKey && (
                 <button
@@ -299,111 +237,23 @@ export default function MainPage({
           )}
 
           {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && (
-            <div className="search-container">
-              <div className="input-clear-wrap search-wrap">
-                <input
-                  type="text"
-                  className="search-input"
-                  placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : activeTab === 'recents' ? 'Recents' : 'Favorites'}...`}
-                  value={tabSearch[activeTab] || ''}
-                  onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
-                  onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                />
-                {!!(tabSearch[activeTab] || '') && (
-                  <button
-                    className="text-clear-btn"
-                    onClick={() => setTabSearch(prev => ({ ...prev, [activeTab]: '' }))}
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-              <button className="btn" onClick={handleSearch} disabled={loading}><FaSearch /></button>
-              {activeTab === 'db' && (
-                <button className="add-btn" onClick={openAddModal} title="Add Song"><FaPlus /></button>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'db' && (
-            <div className="az-filter">
-              {['ALL', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')].map(letter => (
-                <button
-                  key={letter}
-                  className={`az-btn ${selectedLetter === letter ? 'active' : ''}`}
-                  onClick={() => {
-                    if (letter === 'ALL') { setSelectedLetter(null); setResults([]); setTabSearch(prev => ({ ...prev, db: '' })); }
-                    else handleLetterFilter(letter);
-                  }}
-                >{letter}</button>
-              ))}
-            </div>
-          )}
-
-          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && loading && <div className="loading">Searching...</div>}
-
-          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && !loading && results.length > 0 && (
-            <div className="song-list">
-              {results.map((item, index) => {
-                const isFav = favorites.some(f => f.title === item.title);
-                const isCached = !!offlineCache[item.id];
-                return (
-                  <div key={index} className="song-card" onClick={() => handleSongSelect(item)}>
-                    <div style={{ flex: 1 }}>
-                      <p className="song-title">{item.title}</p>
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                        {item.source === 'db' ? '📦 DB' : `🌐 ${getWebDomain(item.url)}`}
-                        {item.offline && ' • 💾 Offline'}
-                        {isCached && item.source === 'db' && ' • ⚡ Cached'}
-                      </span>
-                    </div>
-                    {item.source === 'web' && (
-                      <button
-                        className="web-save-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSaveWebResultToDb(item);
-                        }}
-                        disabled={!!savingWebSongs[item.url || item.title]}
-                      >
-                        <FaSave style={{ marginRight: 6 }} /> {savingWebSongs[item.url || item.title] ? 'Saving...' : 'Save DB'}
-                      </button>
-                    )}
-                    <button className="fav-btn" onClick={e => toggleFavorite(e, item)}>
-                      {isFav ? <FaStar color="#f5b041" size={18} /> : <FaRegStar color="#666" size={18} />}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && !loading && results.length === 0 && (tabSearch[activeTab] || '') && !selectedLetter && (
-            <div className="loading">No songs found.</div>
-          )}
-          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && !loading && results.length === 0 && selectedLetter && (
-            <div className="loading">No songs starting with "{selectedLetter}".</div>
+            <SongSearchPage
+              activeTab={activeTab}
+              apiBase={apiBase}
+              sqliteEnabled={sqliteEnabled}
+              offlineCache={offlineCache}
+              setOfflineCache={setOfflineCache}
+              upsertOfflineSongSqlite={upsertOfflineSongSqlite}
+              persistLocallyAndQueue={persistLocallyAndQueue}
+              setStorageState={setStorageState}
+              writeLocalStorage={writeLocalStorage}
+              onSongSelect={onSongSelect}
+              openSettingsPage={openSettingsPage}
+              setShowHomeCards={setShowHomeCards}
+              registerLoadSong={registerLoadSong}
+            />
           )}
         </div>
-      )}
-
-      {showAddModal && (
-        <AddSongModal
-          setShowAddModal={setShowAddModal}
-          addTitle={addTitle}
-          setAddTitle={setAddTitle}
-          addMode={addMode}
-          setAddMode={setAddMode}
-          manualStanzas={manualStanzas}
-          updateManualStanza={updateManualStanza}
-          removeManualStanza={removeManualStanza}
-          addManualStanza={addManualStanza}
-          autoText={autoText}
-          setAutoText={setAutoText}
-          addError={addError}
-          handleSaveSong={handleSaveSong}
-          addSaving={addSaving}
-        />
       )}
 
       {showProfileSetup && (
