@@ -273,7 +273,7 @@ body {
 /* Content Area */
 .content-area {
   flex: 1;
-  padding: 18px calc(12px + var(--safe-right)) var(--safe-bottom) calc(12px + var(--safe-left));
+  padding: 18px calc(12px + var(--safe-right)) 0 calc(12px + var(--safe-left));
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -1085,7 +1085,7 @@ body {
 /* ── Single floating bottom pill ── */
 .bible-float-pill {
   position: absolute;
-  bottom: calc(var(--safe-bottom) - 0.125rem);
+  bottom: calc(0.7rem);
   left: 50%;
   transform: translateX(-50%);
   width: calc(100% - 2rem);
