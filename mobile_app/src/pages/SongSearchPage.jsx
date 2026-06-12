@@ -132,6 +132,7 @@ export default function SongSearchPage({
   onSongSelect,
   openSettingsPage,
   setShowHomeCards,
+  openHomeCard,
   registerLoadSong,
 }) {
   const [tabSearch, setTabSearch] = useState(() => loadTabSearchState());
@@ -167,6 +168,17 @@ export default function SongSearchPage({
   const [autoText, setAutoText] = useState('');
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState('');
+
+  useEffect(() => {
+    if (activeTab !== 'db') return;
+    const prefill = sessionStorage.getItem('addSongPrefill');
+    if (!prefill) return;
+    sessionStorage.removeItem('addSongPrefill');
+    setAutoText(prefill);
+    setAddMode('auto');
+    setAddTitle('');
+    setShowAddModal(true);
+  }, [activeTab]);
   const [savingWebSongs, setSavingWebSongs] = useState({});
 
   const fuseIndexRef = useRef(null);
@@ -175,6 +187,7 @@ export default function SongSearchPage({
   const searchMountedRef = useRef(false);
   const offlineCacheRef = useRef(offlineCache);
   useEffect(() => { offlineCacheRef.current = offlineCache; }, [offlineCache]);
+  const handleSongSelectRef = useRef(null);
 
   const buildFuse = useCallback((items) => {
     if (!items || items.length === 0) return null;
@@ -396,6 +409,27 @@ export default function SongSearchPage({
     } finally { setLoading(false); }
   };
 
+  handleSongSelectRef.current = handleSongSelect;
+
+  // Intercepts URL pastes — always fresh (not memoized) so it reads latest tabSearch
+  const handleSearchOrUrl = () => {
+    const q = (tabSearch[activeTab] || '').trim();
+    if (/^https?:\/\//i.test(q)) {
+      let title = '';
+      try {
+        const u = new URL(q);
+        const songParam = u.searchParams.get('song');
+        const keywordParam = u.searchParams.get('keyword');
+        if (songParam) title = songParam.replace(/\+/g, ' ').trim();
+        else if (keywordParam) title = keywordParam.replace(/\+/g, ' ').trim();
+      } catch {}
+      if (!title) title = getWebDomain(q);
+      handleSongSelect({ url: q, title, source: 'web' }, 0);
+    } else {
+      handleSearch();
+    }
+  };
+
   // Let parent call handleSongSelect for queue-based navigation (e.g. swipe in presentation)
   if (registerLoadSong) registerLoadSong(handleSongSelect);
 
@@ -464,12 +498,13 @@ export default function SongSearchPage({
         <div className="search-container">
           <div className="input-clear-wrap search-wrap">
             <input
+              id="song-search-input"
               type="text"
               className="search-input"
               placeholder={`Search ${activeTab === 'db' ? 'Database' : activeTab === 'web' ? 'Web' : activeTab === 'recents' ? 'Recents' : 'Favorites'}...`}
               value={tabSearch[activeTab] || ''}
               onChange={e => setTabSearch(prev => ({ ...prev, [activeTab]: e.target.value }))}
-              onKeyDown={e => e.key === 'Enter' && handleSearch()}
+              onKeyDown={e => e.key === 'Enter' && handleSearchOrUrl()}
             />
             {!!(tabSearch[activeTab] || '') && (
               <button className="text-clear-btn" onClick={() => setTabSearch(prev => ({ ...prev, [activeTab]: '' }))}>
@@ -477,7 +512,7 @@ export default function SongSearchPage({
               </button>
             )}
           </div>
-          <button className="btn" onClick={handleSearch} disabled={loading}><FaSearch /></button>
+          <button className="btn" onClick={handleSearchOrUrl} disabled={loading}><FaSearch /></button>
           {activeTab === 'db' && (
             <button className="add-btn" onClick={openAddModal} title="Add Song"><FaPlus /></button>
           )}
@@ -517,10 +552,14 @@ export default function SongSearchPage({
                 const isFav = favorites.some(f => f.title === item.title);
                 return (
                   <div key={index} className="song-card" onClick={() => handleSongSelect(item, index)}>
+                    <span className="song-card-number">{index + 1}</span>
                     <div className="song-card-info">
                       <p className="song-title">{item.title}</p>
                       <div className="song-meta">
                         {item.language && <span className="lang-badge">{item.language}</span>}
+                        {item.source === 'web' && (
+                          <span className="source-badge source-web">{getWebDomain(item.url)}</span>
+                        )}
                       </div>
                     </div>
                     {item.source === 'web' && (
@@ -573,6 +612,7 @@ export default function SongSearchPage({
           addError={addError}
           handleSaveSong={handleSaveSong}
           addSaving={addSaving}
+          onOpenTransliterate={openHomeCard ? () => { setShowAddModal(false); openHomeCard('transliterate'); } : undefined}
         />
       )}
     </>

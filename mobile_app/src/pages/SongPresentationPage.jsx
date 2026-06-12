@@ -2,6 +2,12 @@ import { useState, useRef } from 'react';
 import { FaArrowLeft, FaCog, FaEdit, FaSave, FaTimes } from 'react-icons/fa';
 import { LuMonitorOff } from 'react-icons/lu';
 
+const autoResizeTextarea = (el) => {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+};
+
 export default function SongPresentationPage({
   displayFont,
   selectedSong,
@@ -122,9 +128,9 @@ export default function SongPresentationPage({
                 <div className="input-clear-wrap">
                   <textarea
                     className="stanza-textarea"
-                    rows={4}
                     value={stanza}
-                    onChange={e => updateEditableStanza(i, e.target.value)}
+                    onChange={e => { updateEditableStanza(i, e.target.value); autoResizeTextarea(e.target); }}
+                    ref={el => el && autoResizeTextarea(el)}
                   />
                   {!!stanza && <button className="text-clear-btn" onClick={() => updateEditableStanza(i, '')}>Clear</button>}
                 </div>

@@ -29,6 +29,22 @@ function absoluteUrl(base, href) {
     return `${base}/${href}`;
 }
 
+// Groups flat lines into stanzas split by blank lines
+function stanzasFromLines(lines) {
+    const stanzas = [];
+    let current = [];
+    for (const raw of lines) {
+        const parts = raw.split('\n');
+        for (const part of parts) {
+            const line = part.trim();
+            if (!line) { if (current.length) { stanzas.push(current.join('\n')); current = []; } }
+            else current.push(line);
+        }
+    }
+    if (current.length) stanzas.push(current.join('\n'));
+    return stanzas.filter(s => s.length > 5).filter((s, i, a) => a.indexOf(s) === i);
+}
+
 function buildQueryTokens(query) {
     return String(query || '')
         .toLowerCase()
@@ -551,11 +567,64 @@ async function fetchLyricsFromChristSquare(url) {
 }
 
 async function fetchLyricsFromChristianSongBook(url) {
+    // Query-param style URLs (e.g. /?language=tamil&id=583&section=romanised)
+    // The page is JS-rendered; use the WordPress REST API with the post ID instead.
+    const parsedUrl = new URL(url);
+    const isQueryPage = parsedUrl.pathname === '/' && parsedUrl.searchParams.has('id');
+    if (isQueryPage) {
+        const postId = parsedUrl.searchParams.get('id');
+        const section = parsedUrl.searchParams.get('section') || '';
+        const apiUrl = `${CSB_BASE_URL}/wp-json/wp/v2/posts/${postId}`;
+        try {
+            const { data: post } = await axios.get(apiUrl, { headers: HEADERS, timeout: 12000 });
+            const rendered = post.content?.rendered || '';
+            if (rendered) {
+                const $ = cheerio.load(rendered);
+                $('script, style, noscript').remove();
+
+                // If section is specified, try to find a matching heading and grab content below it
+                if (section) {
+                    const headings = $('h1,h2,h3,h4,strong,b').filter((_, el) =>
+                        $(el).text().toLowerCase().includes(section.toLowerCase())
+                    );
+                    if (headings.length) {
+                        const sectionLines = [];
+                        headings.first().nextAll('p,div,li').each((_, el) => {
+                            const text = $(el).html()
+                                .replace(/<br\s*\/?>/gi, '\n')
+                                .replace(/<[^>]+>/g, '')
+                                .replace(/&nbsp;/g, ' ')
+                                .trim();
+                            if (text.length > 3) sectionLines.push(text);
+                        });
+                        if (sectionLines.length >= 2) return stanzasFromLines(sectionLines);
+                    }
+                }
+
+                // Fall back to full post content
+                const allLines = [];
+                $('p,li,div').each((_, el) => {
+                    const text = $(el).html()
+                        .replace(/<br\s*\/?>/gi, '\n')
+                        .replace(/<[^>]+>/g, '')
+                        .replace(/&nbsp;/g, ' ')
+                        .trim();
+                    if (text.length > 3 && !/search|menu|comment|share|copyright|posted on|posted in/i.test(text))
+                        allLines.push(text);
+                });
+                if (allLines.length >= 2) return stanzasFromLines(allLines);
+            }
+        } catch (err) {
+            console.warn(`[scraper] CSB WP API failed for id=${postId}: ${err.message}`);
+        }
+        return ['Error: Could not extract lyrics from this ChristianSongBook page.'];
+    }
+
     const { data } = await axios.get(url, { headers: HEADERS, timeout: 12000 });
     const $ = cheerio.load(data);
+    $('script, style, noscript, .sharedaddy, .jp-relatedposts, nav, header, footer').remove();
 
-    $('script, style, noscript, .sharedaddy, .jp-relatedposts').remove();
-
+    // Blog-post style URLs (e.g. /song-title/)
     const blocks = [];
     const contentRoot = $('.entry-content, .post-content, article').first();
     const root = contentRoot.length ? contentRoot : $('body');

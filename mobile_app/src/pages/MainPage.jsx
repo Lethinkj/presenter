@@ -10,12 +10,14 @@ import {
   FaCog,
   FaStop,
   FaStar,
+  FaLanguage,
 } from 'react-icons/fa';
 import BiblePage from './BiblePage';
 import ImagePage from './ImagePage';
 import NotesPage from './NotesPage';
 import ProfileSetupModal from './ProfileSetupModal';
 import SongSearchPage from './SongSearchPage';
+import TransliterationPage from './TransliterationPage';
 
 export default function MainPage({
   userName,
@@ -94,6 +96,7 @@ export default function MainPage({
     { key: 'recents', label: 'Recents', icon: <FaHistory /> },
     { key: 'images', label: 'Images', icon: <FaImage /> },
     { key: 'notes', label: 'Notes', icon: <FaStickyNote /> },
+    { key: 'transliterate', label: 'Lyrics Convert', icon: <FaLanguage /> },
     { key: 'settings', label: 'Settings', icon: <FaCog /> }
   ];
 
@@ -158,7 +161,7 @@ export default function MainPage({
           </div>
         </div>
       ) : (
-        <div className={`content-area ${activeTab === 'bible' ? 'bible-content-area' : ''} ${activeTab !== 'bible' && activeTab !== 'images' && activeTab !== 'notes' ? 'song-content-area' : ''}`}>
+        <div className={`content-area ${activeTab === 'bible' ? 'bible-content-area' : ''} ${activeTab !== 'bible' && activeTab !== 'images' ? 'song-content-area' : ''}`}>
           <div className="section-topbar">
             <div className="section-back-title">
               <button className="back-btn" onClick={() => setShowHomeCards(true)}>
@@ -206,6 +209,10 @@ export default function MainPage({
 
           {activeTab === 'notes' && <NotesPage />}
 
+          {activeTab === 'transliterate' && (
+            <TransliterationPage openHomeCard={openHomeCard} />
+          )}
+
           {activeTab === 'bible' && (
             <BiblePage
               bibleLoading={bibleLoading}
@@ -236,7 +243,7 @@ export default function MainPage({
             />
           )}
 
-          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && (
+          {activeTab !== 'images' && activeTab !== 'bible' && activeTab !== 'notes' && activeTab !== 'transliterate' && (
             <SongSearchPage
               activeTab={activeTab}
               apiBase={apiBase}
@@ -250,6 +257,7 @@ export default function MainPage({
               onSongSelect={onSongSelect}
               openSettingsPage={openSettingsPage}
               setShowHomeCards={setShowHomeCards}
+              openHomeCard={openHomeCard}
               registerLoadSong={registerLoadSong}
             />
           )}
