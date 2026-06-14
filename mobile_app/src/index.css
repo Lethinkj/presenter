@@ -1157,7 +1157,7 @@ body {
   cursor: pointer;
   display: grid;
   grid-template-columns: 1.5rem minmax(0, 1fr);
-  gap: 0.625rem;
+  gap: 0.225rem;
   transition: background 0.15s;
 }
 .bible-verse-body:hover {
@@ -1588,6 +1588,57 @@ body {
   transition: background 0.15s;
 }
 .drawer-clear-btn:hover { background: rgba(239,68,68,0.14); }
+
+/* ── Recent verses in drawer ── */
+.recent-verse-list {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scrollbar-width: none;
+}
+.recent-verse-list::-webkit-scrollbar { display: none; }
+
+.recent-verse-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex-shrink: 0;
+  width: 10rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 0.625rem;
+  background: rgba(255,255,255,0.04);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+  gap: 0.2rem;
+}
+.recent-verse-chip:hover { background: rgba(255,255,255,0.09); }
+.recent-verse-chip:active { background: rgba(212,175,55,0.12); border-color: rgba(212,175,55,0.3); }
+
+.recent-verse-ref {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-gold);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.recent-verse-text {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
 
 /* ── Quick select overlay ── */
 .bible-overlay {

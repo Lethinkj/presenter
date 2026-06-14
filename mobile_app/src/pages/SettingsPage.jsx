@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { FaArrowLeft, FaDownload, FaShareAlt, FaTrash, FaChevronRight,
          FaUser, FaTv, FaWifi, FaDatabase, FaHdd } from 'react-icons/fa';
 import { Capacitor } from '@capacitor/core';
@@ -32,6 +32,7 @@ const SECTIONS = [
 
 export default function SettingsPage({
   closeSettingsPage,
+  registerSettingsBackHandler,
   userName, setUserName,
   deviceCode,
   roomCode, setRoomCode,
@@ -60,6 +61,13 @@ export default function SettingsPage({
   clearLocalSearchCache,
 }) {
   const [activeSection, setActiveSection] = useState(null);
+
+  useEffect(() => {
+    registerSettingsBackHandler?.(() => {
+      if (activeSection) { setActiveSection(null); return true; }
+      return false;
+    });
+  }, [activeSection, registerSettingsBackHandler]);
 
   const section = SECTIONS.find(s => s.key === activeSection);
 

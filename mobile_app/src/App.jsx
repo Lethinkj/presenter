@@ -401,6 +401,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHomeCards, setShowHomeCards] = useState(true);
   const settingsReturnRef = useRef(null);
+  const settingsBackHandlerRef = useRef(null);
   const bibleBackHandlerRef = useRef(null);
   const loadSongRef = useRef(null);
 
@@ -421,6 +422,7 @@ function App() {
   const presentAttemptRef = useRef(0);
   const ensureConnectedRef = useRef(() => {});
   const lastBackPressRef = useRef(0);
+  const returningFromAiBrowserRef = useRef(false);
   const [activeStanza, setActiveStanza] = useState(null);
   const [isEditingSong, setIsEditingSong] = useState(false);
   const [editTitle, setEditTitle] = useState('');
@@ -1149,8 +1151,9 @@ function App() {
         setOfflineCache(map);
       }
 
-      setOfflineDownloadState({ downloading: false, downloaded: stats.added, total: stats.added, lastError: '', phase: 'done' });
-      alert(`Downloaded ${stats.added} songs for offline access.`);
+      const failNote = stats.failed > 0 ? `\n\n⚠️ ${stats.failed} batch(es) had network errors — some songs may have missing lyrics. Try syncing again when connection is stable.` : '';
+      setOfflineDownloadState({ downloading: false, downloaded: stats.added, total: stats.added, lastError: stats.failed > 0 ? `${stats.failed} batch(es) failed` : '', phase: 'done' });
+      alert(`Downloaded ${stats.added} songs for offline access.${failNote}`);
     } catch (err) {
       setOfflineDownloadState(prev => ({
         ...prev,
@@ -1610,6 +1613,7 @@ function App() {
 
   const handleInternalBack = useCallback(() => {
     if (showSettings) {
+      if (settingsBackHandlerRef.current?.()) return true;
       restoreViewFromSettings();
       return true;
     }
@@ -1619,6 +1623,10 @@ function App() {
       return true;
     }
     if (bibleBackHandlerRef.current?.()) {
+      return true;
+    }
+    if (returningFromAiBrowserRef.current) {
+      returningFromAiBrowserRef.current = false;
       return true;
     }
     if (!showHomeCards) {
@@ -2460,6 +2468,7 @@ function App() {
     return (
       <SettingsPage
         closeSettingsPage={closeSettingsPage}
+        registerSettingsBackHandler={(fn) => { settingsBackHandlerRef.current = fn; }}
         userName={userName}
         setUserName={setUserName}
         deviceCode={deviceCode}
@@ -2613,6 +2622,7 @@ function App() {
       completeProfileSetup={completeProfileSetup}
       registerBibleBackHandler={(fn) => { bibleBackHandlerRef.current = fn; }}
       registerLoadSong={(fn) => { loadSongRef.current = fn; }}
+      onOpenAiBrowser={() => { returningFromAiBrowserRef.current = true; }}
     />
   );
 }

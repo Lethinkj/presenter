@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { FaCopy, FaSave, FaExchangeAlt, FaRobot, FaEdit } from 'react-icons/fa';
 
 const LANGUAGES = [
@@ -20,7 +20,7 @@ function buildAiPrompt(language, direction, text) {
   return `Transliterate these ${langName} song lyrics into English letters (${romanName}).\nUse singer-friendly romanization — e.g. "naan", "kaadhal", "unnai" — not academic notation like ā or ṭ.\nReturn only the transliteration, preserving line breaks. No explanations.\n\nLyrics:\n${text}`;
 }
 
-export default function TransliterationPage({ openHomeCard }) {
+export default function TransliterationPage({ openHomeCard, onOpenAiBrowser }) {
   const [language, setLanguage]     = useState('tamil');
   const [direction, setDirection]   = useState('roman-to-native');
   const [inputText, setInputText]   = useState('');
@@ -47,9 +47,34 @@ export default function TransliterationPage({ openHomeCard }) {
     const url = app === 'claude'
       ? `https://claude.ai/new?q=${encoded}`
       : `https://chatgpt.com/?prompt=${encoded}`;
+    onOpenAiBrowser?.();
     window.open(url, '_blank');
     setShowPaste(true);
-  }, [inputText, language, direction]);
+  }, [inputText, language, direction, onOpenAiBrowser]);
+
+  useEffect(() => {
+    if (!showPaste) return;
+
+    const tryFillClipboard = async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text.trim()) setPasteText(text);
+      } catch {
+        // clipboard read permission not granted — user pastes manually
+      }
+    };
+
+    const onVisible = () => {
+      if (!document.hidden) tryFillClipboard();
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', tryFillClipboard);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', tryFillClipboard);
+    };
+  }, [showPaste]);
 
   const applyPaste = () => {
     setOutputText(pasteText);
@@ -181,7 +206,7 @@ export default function TransliterationPage({ openHomeCard }) {
             borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10,
           }}>
             <p style={{ margin: 0, fontSize: '0.83rem', color: 'var(--text-secondary)' }}>
-              Copy the AI result and paste it below:
+              Copy the AI result — it will auto-fill when you come back, or paste manually below:
             </p>
             <textarea
               id="lyrics-paste-result"

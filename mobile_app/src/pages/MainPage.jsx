@@ -87,6 +87,7 @@ export default function MainPage({
   completeProfileSetup,
   openSettingsPage,
   registerBibleBackHandler,
+  onOpenAiBrowser,
 }) {
   const homeCards = [
     { key: 'db', label: 'DB Search', icon: <FaDatabase /> },
@@ -210,7 +211,7 @@ export default function MainPage({
           {activeTab === 'notes' && <NotesPage />}
 
           {activeTab === 'transliterate' && (
-            <TransliterationPage openHomeCard={openHomeCard} />
+            <TransliterationPage openHomeCard={openHomeCard} onOpenAiBrowser={onOpenAiBrowser} />
           )}
 
           {activeTab === 'bible' && (

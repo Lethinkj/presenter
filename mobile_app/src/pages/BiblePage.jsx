@@ -76,6 +76,16 @@ const parseQuickSelectInput = (value) => {
   return { raw, bookText, numbers: trailingNumbers, chapter, verse, hasDigits: trailingNumbers.length > 0 };
 };
 
+const readJsonLocalStorageSafely = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+};
+
 const scrollItemIntoList = (container, target) => {
   if (!container || !target) return;
   const containerRect = container.getBoundingClientRect();
@@ -120,6 +130,11 @@ export default function BiblePage({
   const [quickSelectMessage, setQuickSelectMessage] = useState('');
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [scrollTrigger, setScrollTrigger] = useState(0);
+  const [recentVerses, setRecentVerses] = useState(() => {
+    const parsed = readJsonLocalStorageSafely('worship_recent_bible_verses', []);
+    return Array.isArray(parsed) ? parsed : [];
+  });
   const [chapterSheetOpen, setChapterSheetOpen] = useState(false);
   const [bookSheetOpen, setBookSheetOpen] = useState(false);
   const [verseSheetOpen, setVerseSheetOpen] = useState(false);
@@ -238,7 +253,7 @@ export default function BiblePage({
       scrollItemIntoList(container, target);
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeBibleVerseKey, bibleVerseListRef, selectedBibleChapterIndex]);
+  }, [activeBibleVerseKey, bibleVerseListRef, selectedBibleChapterIndex, scrollTrigger]);
 
   useEffect(() => { setVerseMenuKey(null); }, [activeBibleVerseKey]);
 
@@ -422,6 +437,24 @@ export default function BiblePage({
 
   const totalChapters = Array.isArray(selectedBibleBook?.chapters) ? selectedBibleBook.chapters.length : 0;
 
+  const handlePresentBibleVerse = (text, verseNo) => {
+    const entry = {
+      book: selectedBibleBook?.english || '',
+      bookLabel: selectedBibleBook?.tamil || selectedBibleBook?.english || '',
+      chapter: bibleChapterNumber,
+      verse: verseNo,
+      text,
+    };
+    setRecentVerses(prev => {
+      const key = `${entry.book}-${entry.chapter}-${entry.verse}`;
+      const filtered = prev.filter(v => `${v.book}-${v.chapter}-${v.verse}` !== key);
+      const updated = [entry, ...filtered].slice(0, 10);
+      localStorage.setItem('worship_recent_bible_verses', JSON.stringify(updated));
+      return updated;
+    });
+    presentBibleVerse(text, verseNo);
+  };
+
   const phasePlaceholder =
     quickSelectPhase === 'book'
       ? (selectedBibleBook ? `Verse, Ch:Verse, or book — e.g. 5 or 12:3` : 'Book name — e.g. Luke or 1 chr 12 3')
@@ -469,7 +502,7 @@ export default function BiblePage({
                 >
                   <button
                     className="bible-verse-body"
-                    onClick={() => presentBibleVerse(verseItem?.text || '', verseNo)}
+                    onClick={() => handlePresentBibleVerse(verseItem?.text || '', verseNo)}
                   >
                     <span className="bible-verse-no">{verseNo}</span>
                     <span className="bible-verse-text">{verseItem?.text || ''}</span>
@@ -720,6 +753,29 @@ export default function BiblePage({
           <div className="bible-bottom-sheet settings-drawer" onClick={e => e.stopPropagation()}>
             <div className="sheet-handle" />
             <div className="sheet-title">Display Settings</div>
+
+            {recentVerses.length > 0 && (
+              <div className="drawer-section">
+                <div className="drawer-label">Recent verses</div>
+                <div className="recent-verse-list">
+                  {recentVerses.map((v, i) => (
+                    <button
+                      key={`${v.book}-${v.chapter}-${v.verse}-${i}`}
+                      className="recent-verse-chip"
+                      onClick={async () => {
+                        setDrawerOpen(false);
+                        const book = (Array.isArray(bibleBooks) ? bibleBooks : []).find(b => b.english === v.book);
+                        if (book) await openBibleBook(book, { chapterNumber: v.chapter, verseNumber: v.verse });
+                        setScrollTrigger(n => n + 1);
+                      }}
+                    >
+                      <span className="recent-verse-ref">{v.bookLabel} {v.chapter}:{v.verse}</span>
+                      <span className="recent-verse-text">{v.text}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="drawer-section">
               <div className="drawer-label">Font style</div>

@@ -7,6 +7,7 @@ const TABLE_NAME = 'offline_songs';
 
 let sqlite;
 let db;
+let writeQueue = Promise.resolve();
 
 const ensureDb = async () => {
   if (!Capacitor.isNativePlatform()) return null;
@@ -14,7 +15,10 @@ const ensureDb = async () => {
     sqlite = new SQLiteConnection(CapacitorSQLite);
   }
   if (!db) {
-    db = await sqlite.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
+    const isConn = (await sqlite.isConnection(DB_NAME, false)).result;
+    db = isConn
+      ? await sqlite.retrieveConnection(DB_NAME, false)
+      : await sqlite.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
     await db.open();
     await db.execute(
       `CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
@@ -29,7 +33,6 @@ const ensureDb = async () => {
       );`
     );
     await db.execute(`CREATE INDEX IF NOT EXISTS ${TABLE_NAME}_title_idx ON ${TABLE_NAME}(title);`);
-    // Migrate v1 tables before creating indexes that depend on the new columns
     try { await db.execute(`ALTER TABLE ${TABLE_NAME} ADD COLUMN updated_at TEXT;`); } catch {}
     try { await db.execute(`ALTER TABLE ${TABLE_NAME} ADD COLUMN is_deleted INTEGER DEFAULT 0;`); } catch {}
     await db.execute(`CREATE INDEX IF NOT EXISTS ${TABLE_NAME}_updated_at_idx ON ${TABLE_NAME}(updated_at);`);
@@ -45,6 +48,13 @@ const parseStanzas = (value) => {
   } catch {
     return [];
   }
+};
+
+// Serialise all writes — each fn runs only after the previous one settles
+const enqueueWrite = (fn) => {
+  const result = writeQueue.then(fn, fn);
+  writeQueue = result.catch(() => {}); // keep chain alive even if fn throws
+  return result;
 };
 
 export const initOfflineSqlite = async () => {
@@ -82,7 +92,7 @@ export const getMaxUpdatedAt = async () => {
   return val || null;
 };
 
-export const upsertOfflineSong = async (song) => {
+export const upsertOfflineSong = (song) => enqueueWrite(async () => {
   const active = await ensureDb();
   if (!active) return;
 
@@ -101,67 +111,55 @@ export const upsertOfflineSong = async (song) => {
 
   await active.run(
     `INSERT OR REPLACE INTO ${TABLE_NAME} (id, title, stanzas, source, pending_sync, source_url, updated_at, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      payload.id,
-      payload.title,
-      payload.stanzas,
-      payload.source,
-      payload.pending_sync,
-      payload.source_url,
-      payload.updated_at,
-      payload.is_deleted,
-    ]
+    [payload.id, payload.title, payload.stanzas, payload.source, payload.pending_sync, payload.source_url, payload.updated_at, payload.is_deleted]
   );
-};
+});
 
-export const bulkUpsertOfflineSongs = async (songs) => {
+// SQLite allows max 999 bound params per statement; 8 cols → max 124 rows per INSERT
+const INSERT_CHUNK = 100;
+
+export const bulkUpsertOfflineSongs = (songs) => enqueueWrite(async () => {
   const active = await ensureDb();
   if (!active) return;
 
-  const list = Array.isArray(songs) ? songs : [];
-  if (!list.length) return;
+  const rows = (Array.isArray(songs) ? songs : [])
+    .map(song => ({
+      id: String(song?.id || ''),
+      title: String(song?.title || ''),
+      stanzas: JSON.stringify(song?.stanzas || []),
+      source: song?.source || 'db',
+      pending_sync: song?.pendingSync ? 1 : 0,
+      source_url: song?.sourceUrl || null,
+      updated_at: song?.updatedAt || null,
+      is_deleted: song?.isDeleted ? 1 : 0,
+    }))
+    .filter(p => p.id && p.title);
 
-  await active.execute('BEGIN TRANSACTION;');
+  if (!rows.length) return;
+
+  await active.beginTransaction();
   try {
-    for (const song of list) {
-      const payload = {
-        id: String(song?.id || ''),
-        title: String(song?.title || ''),
-        stanzas: JSON.stringify(song?.stanzas || []),
-        source: song?.source || 'db',
-        pending_sync: song?.pendingSync ? 1 : 0,
-        source_url: song?.sourceUrl || null,
-        updated_at: song?.updatedAt || null,
-        is_deleted: song?.isDeleted ? 1 : 0,
-      };
-
-      if (!payload.id || !payload.title) continue;
-
+    for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+      const chunk = rows.slice(i, i + INSERT_CHUNK);
+      const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      const values = chunk.flatMap(p => [p.id, p.title, p.stanzas, p.source, p.pending_sync, p.source_url, p.updated_at, p.is_deleted]);
       await active.run(
-        `INSERT OR REPLACE INTO ${TABLE_NAME} (id, title, stanzas, source, pending_sync, source_url, updated_at, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          payload.id,
-          payload.title,
-          payload.stanzas,
-          payload.source,
-          payload.pending_sync,
-          payload.source_url,
-          payload.updated_at,
-          payload.is_deleted,
-        ]
+        `INSERT OR REPLACE INTO ${TABLE_NAME} (id, title, stanzas, source, pending_sync, source_url, updated_at, is_deleted) VALUES ${placeholders}`,
+        values,
+        false, // transaction managed externally
       );
     }
-    await active.execute('COMMIT;');
+    await active.commitTransaction();
   } catch (err) {
-    await active.execute('ROLLBACK;');
+    try { await active.rollbackTransaction(); } catch {} // guard: rollback must not shadow real error
     throw err;
   }
-};
+});
 
-export const deleteOfflineSong = async (songId) => {
+export const deleteOfflineSong = (songId) => enqueueWrite(async () => {
   const active = await ensureDb();
   if (!active) return;
   const id = String(songId || '');
   if (!id) return;
   await active.run(`DELETE FROM ${TABLE_NAME} WHERE id = ?`, [id]);
-};
+});
