@@ -455,6 +455,19 @@ export default function BiblePage({
     presentBibleVerse(text, verseNo);
   };
 
+  const removeRecentVerse = (index) => {
+    setRecentVerses(prev => {
+      const updated = prev.filter((_, i) => i !== index);
+      localStorage.setItem('worship_recent_bible_verses', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const clearRecentVerses = () => {
+    setRecentVerses([]);
+    localStorage.removeItem('worship_recent_bible_verses');
+  };
+
   const phasePlaceholder =
     quickSelectPhase === 'book'
       ? (selectedBibleBook ? `Verse, Ch:Verse, or book — e.g. 5 or 12:3` : 'Book name — e.g. Luke or 1 chr 12 3')
@@ -756,22 +769,31 @@ export default function BiblePage({
 
             {recentVerses.length > 0 && (
               <div className="drawer-section">
-                <div className="drawer-label">Recent verses</div>
+                <div className="drawer-label-row">
+                  <span className="drawer-label">Recent verses</span>
+                  <button className="recent-verse-clear-all" onClick={clearRecentVerses}>Clear all</button>
+                </div>
                 <div className="recent-verse-list">
                   {recentVerses.map((v, i) => (
-                    <button
-                      key={`${v.book}-${v.chapter}-${v.verse}-${i}`}
-                      className="recent-verse-chip"
-                      onClick={async () => {
-                        setDrawerOpen(false);
-                        const book = (Array.isArray(bibleBooks) ? bibleBooks : []).find(b => b.english === v.book);
-                        if (book) await openBibleBook(book, { chapterNumber: v.chapter, verseNumber: v.verse });
-                        setScrollTrigger(n => n + 1);
-                      }}
-                    >
-                      <span className="recent-verse-ref">{v.bookLabel} {v.chapter}:{v.verse}</span>
-                      <span className="recent-verse-text">{v.text}</span>
-                    </button>
+                    <div key={`${v.book}-${v.chapter}-${v.verse}-${i}`} className="recent-verse-chip-wrap">
+                      <button
+                        className="recent-verse-chip"
+                        onClick={async () => {
+                          setDrawerOpen(false);
+                          const book = (Array.isArray(bibleBooks) ? bibleBooks : []).find(b => b.english === v.book);
+                          if (book) await openBibleBook(book, { chapterNumber: v.chapter, verseNumber: v.verse });
+                          setScrollTrigger(n => n + 1);
+                        }}
+                      >
+                        <span className="recent-verse-ref">{v.bookLabel} {v.chapter}:{v.verse}</span>
+                        <span className="recent-verse-text">{v.text}</span>
+                      </button>
+                      <button
+                        className="recent-verse-delete"
+                        onClick={e => { e.stopPropagation(); removeRecentVerse(i); }}
+                        aria-label="Remove"
+                      >×</button>
+                    </div>
                   ))}
                 </div>
               </div>

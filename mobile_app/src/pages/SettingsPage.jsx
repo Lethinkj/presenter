@@ -95,6 +95,9 @@ export default function SettingsPage({
                 <FaChevronRight className="settings-nav-chevron" />
               </button>
             ))}
+            <p style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.75rem', opacity: 0.5, marginTop: '2rem', marginBottom: '0.5rem' }}>
+              WorshipCast v0.7
+            </p>
           </div>
         ) : activeSection === 'presenter' ? (
           <PresenterSection
