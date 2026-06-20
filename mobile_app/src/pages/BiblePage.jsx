@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useBibleSwipe } from '../useBibleSwipe';
 import {
   FaSearch, FaCopy, FaChevronLeft, FaChevronRight, FaTimes,
   FaBook,
@@ -108,8 +109,6 @@ export default function BiblePage({
   handleBibleVerseSelect,
   bibleVerses,
   bibleVerseListRef,
-  handleBibleSwipeStart,
-  handleBibleSwipeEnd,
   selectedBibleChapterIndex,
   activeBibleVerseKey,
   presentBibleVerse,
@@ -123,6 +122,7 @@ export default function BiblePage({
   setBibleRefOnlyMode,
   registerBibleBackHandler,
 }) {
+  useBibleSwipe(bibleVerseListRef, goToBibleChapter, selectedBibleChapterIndex);
   const quickSelectInputRef = useRef(null);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const [quickSelectPhase, setQuickSelectPhase] = useState('book');
@@ -497,8 +497,6 @@ export default function BiblePage({
           <div
             ref={bibleVerseListRef}
             className="bible-verse-list"
-            onTouchStart={handleBibleSwipeStart}
-            onTouchEnd={handleBibleSwipeEnd}
           >
             <div className="bible-list-start-pad" />
             {bibleVerses.map((verseItem, idx) => {
@@ -875,8 +873,6 @@ export default function BiblePage({
           presentBibleVerse={presentBibleVerse}
           openBibleBook={openBibleBook}
           goToBibleChapter={goToBibleChapter}
-          handleBibleSwipeStart={handleBibleSwipeStart}
-          handleBibleSwipeEnd={handleBibleSwipeEnd}
           onDrawerOpen={() => setDrawerOpen(true)}
           onBookSheetOpen={() => setBookSheetOpen(true)}
           openQuickSelect={openQuickSelect}

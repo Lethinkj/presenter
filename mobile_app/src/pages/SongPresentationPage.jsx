@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { useSwipe } from '../useSwipe';
 import { FaArrowLeft, FaCog, FaEdit, FaSave, FaTimes } from 'react-icons/fa';
 import { LuMonitorOff } from 'react-icons/lu';
 
@@ -36,20 +37,15 @@ export default function SongPresentationPage({
   onQueueNavigate,
 }) {
   const [showPresSettings, setShowPresSettings] = useState(false);
-  const touchStartX = useRef(null);
+  const scrollRef = useRef(null);
 
-  const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
-  const handleTouchEnd = (e) => {
-    if (touchStartX.current === null) return;
-    const dx = e.changedTouches[0].clientX - touchStartX.current;
-    touchStartX.current = null;
-    if (Math.abs(dx) < 60) return;
-    const { results, index } = songQueue || {};
-    if (!results || results.length === 0) return;
-    const nextIndex = dx < 0 ? index + 1 : index - 1;
-    if (nextIndex < 0 || nextIndex >= results.length) return;
-    onQueueNavigate(results[nextIndex], nextIndex);
-  };
+  const { results, index } = songQueue || {};
+  useSwipe(
+    scrollRef,
+    () => { if (results && index + 1 < results.length) onQueueNavigate(results[index + 1], index + 1); },
+    () => { if (results && index - 1 >= 0) onQueueNavigate(results[index - 1], index - 1); },
+    { minDx: 60 },
+  );
 
   const safeSelectedSong = selectedSong || {};
   const songStanzas = Array.isArray(safeSelectedSong.stanzas) ? safeSelectedSong.stanzas : [];
@@ -107,7 +103,7 @@ export default function SongPresentationPage({
       )}
 
       {/* Scrollable stanza list */}
-      <div className="presentation-scroll" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      <div ref={scrollRef} className="presentation-scroll">
         {displayStanzas.length === 0 && (
           <div className="loading">No lyrics yet. Go back and reopen the song.</div>
         )}

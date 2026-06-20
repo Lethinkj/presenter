@@ -59,8 +59,6 @@ export default function MainPage({
   handleBibleVerseSelect,
   bibleVerses,
   bibleVerseListRef,
-  handleBibleSwipeStart,
-  handleBibleSwipeEnd,
   selectedBibleChapterIndex,
   activeBibleVerseKey,
   presentBibleVerse,
@@ -227,8 +225,6 @@ export default function MainPage({
               handleBibleVerseSelect={handleBibleVerseSelect}
               bibleVerses={bibleVerses}
               bibleVerseListRef={bibleVerseListRef}
-              handleBibleSwipeStart={handleBibleSwipeStart}
-              handleBibleSwipeEnd={handleBibleSwipeEnd}
               selectedBibleChapterIndex={selectedBibleChapterIndex}
               activeBibleVerseKey={activeBibleVerseKey}
               presentBibleVerse={presentBibleVerse}

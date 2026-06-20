@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useBibleSwipe } from '../useBibleSwipe';
 import {
   FaSearch, FaChevronLeft, FaChevronRight, FaTimes,
   FaBook, FaGlobe, FaList, FaLink, FaInfoCircle, FaMagic, FaColumns,
@@ -133,8 +134,6 @@ export default function StudyPage({
   presentBibleVerse,
   openBibleBook,
   goToBibleChapter,
-  handleBibleSwipeStart,
-  handleBibleSwipeEnd,
   onDrawerOpen,
   onBookSheetOpen,
   openQuickSelect,
@@ -164,6 +163,8 @@ export default function StudyPage({
   const studyVerseListRef = useRef(null);
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef({ y: 0, ratio: 0.46 });
+
+  useBibleSwipe(studyVerseListRef, goToBibleChapter, selectedBibleChapterIndex);
 
   /* ── Navigation ── */
   const books = Array.isArray(bibleBooks) ? bibleBooks : [];
@@ -396,8 +397,6 @@ export default function StudyPage({
           <div
             ref={studyVerseListRef}
             className="bible-verse-list"
-            onTouchStart={handleBibleSwipeStart}
-            onTouchEnd={handleBibleSwipeEnd}
           >
             <div style={{ height: '0.25rem' }} />
             {bibleVerses.map((verseItem, idx) => {

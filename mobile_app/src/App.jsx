@@ -483,8 +483,6 @@ function App() {
   const [activeBibleReference, setActiveBibleReference] = useState('');
   const [showBibleControls, setShowBibleControls] = useState(false);
   const [bibleRefOnlyMode, setBibleRefOnlyMode] = useState(false);
-  const bibleSwipeStartXRef = useRef(null);
-  const bibleSwipeStartYRef = useRef(null);
   const bibleVerseListRef = useRef(null);
   const lastFontSyncRef = useRef({ initialized: false, font: '', size: '' });
   const lastImageSizeSyncRef = useRef({ initialized: false, size: '' });
@@ -2084,38 +2082,6 @@ function App() {
     setActiveBibleReference('');
   }, [selectedBibleBook]);
 
-  const handleBibleSwipeStart = (event) => {
-    const touch = event.changedTouches?.[0];
-    bibleSwipeStartXRef.current = touch?.clientX ?? null;
-    bibleSwipeStartYRef.current = touch?.clientY ?? null;
-  };
-
-  const handleBibleSwipeEnd = (event) => {
-    const startX = bibleSwipeStartXRef.current;
-    const startY = bibleSwipeStartYRef.current;
-    const endX = event.changedTouches?.[0]?.clientX ?? null;
-    const endY = event.changedTouches?.[0]?.clientY ?? null;
-    bibleSwipeStartXRef.current = null;
-    bibleSwipeStartYRef.current = null;
-    if (startX === null || endX === null || startY === null || endY === null) return;
-
-    const deltaX = endX - startX;
-    const deltaY = endY - startY;
-    const absX = Math.abs(deltaX);
-    const absY = Math.abs(deltaY);
-
-    // Avoid accidental chapter changes while reading long chapters (vertical scroll).
-    if (absY > absX || absY > 24) return;
-    if (absX < 42) return;
-
-    // Requested flow update: swipe right -> previous chapter, swipe left -> next chapter.
-    if (deltaX > 0) {
-      goToBibleChapter(selectedBibleChapterIndex - 1);
-    } else {
-      goToBibleChapter(selectedBibleChapterIndex + 1);
-    }
-  };
-
   const handleBibleVerseSelect = (verseNo) => {
     if (!selectedBibleBook) return;
     const chapter = selectedBibleBook.chapters?.[selectedBibleChapterIndex];
@@ -2592,8 +2558,6 @@ function App() {
       handleBibleVerseSelect={handleBibleVerseSelect}
       bibleVerses={bibleVerses}
       bibleVerseListRef={bibleVerseListRef}
-      handleBibleSwipeStart={handleBibleSwipeStart}
-      handleBibleSwipeEnd={handleBibleSwipeEnd}
       selectedBibleChapterIndex={selectedBibleChapterIndex}
       activeBibleVerseKey={activeBibleVerseKey}
       presentBibleVerse={presentBibleVerse}
