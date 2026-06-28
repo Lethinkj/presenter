@@ -453,7 +453,7 @@ requestWakeLock().then(acquired => {
             const boxHeight = lyricsContainer.clientHeight;
             if (!boxWidth || !boxHeight) return;
 
-            const maxH = boxHeight * 0.98;
+            const maxH = boxHeight * 0.88;
             const minPx = 18;
             let low = minPx;
             const naturalHigh = Math.max(30, Math.floor(boxHeight * 0.34));
