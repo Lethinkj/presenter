@@ -9,6 +9,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Lato:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&family=Roboto+Slab:wght@400;700&display=swap" rel="stylesheet" />
     <style>
+        @font-face {
+            font-family: 'TAMIL-UNI010';
+            src: url('/TAMIL-UNI010.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+    </style>
+    <style>
         body, html {
             margin: 0;
             padding: 0;
@@ -298,12 +306,7 @@ requestWakeLock().then(acquired => {
                         document.body.classList.remove('ref-visible');
                     }
                     
-                    // Apply font if sent
-                    if (data.font) {
-                        lyricsContainer.style.fontFamily = data.font;
-                    }
-
-                    displayLyrics(data.text, data.fontSize);
+                    displayLyrics(data.text, data.fontSize, data.font);
                 } else if (data.type === 'present-image') {
                     const roomDisplay = document.getElementById('room-code-display');
                     if (roomDisplay) roomDisplay.style.display = 'none';
@@ -354,7 +357,7 @@ requestWakeLock().then(acquired => {
             element.classList.add('quick-fade');
         }
 
-        function displayLyrics(text, fontSize) {
+        function displayLyrics(text, fontSize, font) {
             document.body.classList.remove('image-mode');
             currentFontSizeType = fontSize || 'auto';
 
@@ -371,6 +374,11 @@ requestWakeLock().then(acquired => {
                 lyricsContainer.innerHTML = '';
                 lyricsContainer.appendChild(div);
                 currentElement = div;
+            }
+
+            if (font) {
+                currentElement.style.fontFamily = font;
+                lyricsContainer.style.fontFamily = font;
             }
 
             currentElement.innerText = text || '';
