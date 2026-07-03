@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorshipCast - Stage Display</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Lato:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&family=Roboto+Slab:wght@400;700&display=swap" rel="stylesheet" />
+    <style>
+        @font-face { font-family: 'TAMIL-UNI003'; src: url('/TAMIL-UNI003.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI004'; src: url('/TAMIL-UNI004.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI007'; src: url('/TAMIL-UNI007.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI010'; src: url('/TAMIL-UNI010.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI018'; src: url('/TAMIL-UNI018.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI019'; src: url('/TAMIL-UNI019.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI021'; src: url('/TAMIL-UNI021.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI024'; src: url('/TAMIL-UNI024.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil003'; src: url('/Tamil003.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil004'; src: url('/Tamil004.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil012'; src: url('/Tamil012.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil017'; src: url('/Tamil017.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil022'; src: url('/Tamil022.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil036'; src: url('/Tamil036.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil041'; src: url('/Tamil041.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil059'; src: url('/Tamil059.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil060'; src: url('/Tamil060.ttf') format('truetype'); }
+    </style>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Noto Sans Tamil', 'Inter', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        #layout {
+            display: flex;
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box;
+        }
+
+        #current-pane {
+            flex: 0 0 65%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 4vh 3vw;
+            box-sizing: border-box;
+            border-right: 1px solid rgba(255,255,255,0.1);
+        }
+
+        #current-label {
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: rgba(123, 94, 167, 0.9);
+            margin-bottom: 1.4vh;
+        }
+
+        #current-text {
+            font-size: 4.4vw;
+            font-weight: 700;
+            line-height: 1.3;
+            white-space: pre-wrap;
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        #upcoming-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 3vh 1.6vw;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        #upcoming-label {
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.4);
+            margin-bottom: 1.4vh;
+            flex-shrink: 0;
+        }
+
+        #stanza-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.6vh;
+        }
+
+        .stanza-row {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            padding: 1vh 0.8vw;
+            border-radius: 8px;
+            border-left: 3px solid transparent;
+            opacity: 0.55;
+        }
+
+        .stanza-row .idx {
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: rgba(255,255,255,0.4);
+            flex-shrink: 0;
+            min-width: 1.6em;
+        }
+
+        .stanza-row .preview {
+            font-size: 1.1rem;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .stanza-row.current {
+            opacity: 1;
+            background: rgba(123, 94, 167, 0.18);
+            border-left-color: #7B5EA7;
+        }
+
+        .stanza-row.current .idx { color: #A88FD1; }
+
+        .stanza-row.next {
+            opacity: 0.85;
+        }
+
+        .stanza-row.next .idx::after {
+            content: ' \2192';
+        }
+
+        #status {
+            position: absolute;
+            bottom: 12px;
+            right: 16px;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="layout">
+        <div id="current-pane">
+            <div id="current-label">Now Singing</div>
+            <div id="current-text" style="color:#555; font-size: 2vw;">Waiting for presentation…</div>
+        </div>
+        <div id="upcoming-pane">
+            <div id="upcoming-label">Stanza Order</div>
+            <div id="stanza-list"></div>
+        </div>
+    </div>
+
+    <div id="status">Connecting...</div>
+
+    <script>
+        const currentText = document.getElementById('current-text');
+        const stanzaList = document.getElementById('stanza-list');
+        const statusElement = document.getElementById('status');
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+
+        const normalizeRoomCode = (value) => {
+            const normalized = String(value || '')
+                .trim()
+                .toUpperCase()
+                .replace(/[^A-Z0-9_-]/g, '')
+                .slice(0, 24);
+            return normalized || 'DEFAULT';
+        };
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = normalizeRoomCode(urlParams.get('room') || 'default');
+
+        let ws;
+        let appPingTimer = null;
+        let currentIndex = null;
+
+        function clearPingTimer() {
+            if (appPingTimer) {
+                clearInterval(appPingTimer);
+                appPingTimer = null;
+            }
+        }
+
+        function connectWebSocket() {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                statusElement.innerText = 'Connected: ' + roomId;
+                statusElement.style.color = 'rgba(0, 255, 0, 0.5)';
+
+                ws.send(JSON.stringify({ type: 'join', room: roomId }));
+
+                clearPingTimer();
+                appPingTimer = setInterval(() => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                    ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+                }, 20000);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'stage') {
+                    showStage(data);
+                } else if (data.type === 'clear') {
+                    clearStage();
+                } else if (data.type === 'status' || data.type === 'error') {
+                    console.log('Server message:', data.message);
+                }
+            };
+
+            ws.onclose = () => {
+                clearPingTimer();
+                statusElement.style.display = 'block';
+                statusElement.innerText = 'Disconnected - Reconnecting...';
+                statusElement.style.color = 'rgba(255, 0, 0, 0.5)';
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+        }
+
+        function showStage(data) {
+            currentIndex = data.index;
+
+            if (data.font) currentText.style.fontFamily = data.font;
+            currentText.style.color = '#fff';
+            currentText.style.fontSize = '';
+            currentText.innerText = data.text || '';
+            autoFitCurrent();
+
+            renderStanzaList(data.previews || [], currentIndex);
+        }
+
+        function clearStage() {
+            currentIndex = null;
+            currentText.innerText = 'Waiting for presentation…';
+            currentText.style.color = '#555';
+            currentText.style.fontSize = '2vw';
+            renderStanzaList(lastPreviews, null);
+        }
+
+        let lastPreviews = [];
+
+        function renderStanzaList(previews, activeIndex) {
+            lastPreviews = previews;
+            stanzaList.innerHTML = '';
+            previews.forEach((preview, i) => {
+                const row = document.createElement('div');
+                row.className = 'stanza-row';
+                if (i === activeIndex) row.classList.add('current');
+                else if (i === (activeIndex ?? -2) + 1) row.classList.add('next');
+
+                const idx = document.createElement('div');
+                idx.className = 'idx';
+                idx.innerText = i + 1;
+
+                const text = document.createElement('div');
+                text.className = 'preview';
+                text.innerText = preview || `Stanza ${i + 1}`;
+
+                row.appendChild(idx);
+                row.appendChild(text);
+                stanzaList.appendChild(row);
+            });
+
+            const activeRow = stanzaList.children[activeIndex];
+            if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
+        }
+
+        function autoFitCurrent() {
+            const pane = document.getElementById('current-pane');
+            const boxWidth = pane.clientWidth * 0.92;
+            const boxHeight = pane.clientHeight * 0.7;
+            if (!boxWidth || !boxHeight) return;
+
+            const minPx = 20;
+            const maxPx = Math.max(minPx, Math.floor(boxHeight * 0.4));
+            let low = minPx;
+            let high = maxPx;
+            let best = minPx;
+
+            while (low <= high) {
+                const mid = Math.floor((low + high) / 2);
+                currentText.style.fontSize = `${mid}px`;
+                if (currentText.scrollHeight <= boxHeight && currentText.scrollWidth <= boxWidth) {
+                    best = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+
+            currentText.style.fontSize = `${best}px`;
+        }
+
+        window.addEventListener('resize', () => {
+            if (currentIndex !== null) autoFitCurrent();
+        });
+
+        connectWebSocket();
+    </script>
+</body>
+</html>

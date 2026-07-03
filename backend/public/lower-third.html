@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorshipCast - Lower Third</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Lato:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&family=Roboto+Slab:wght@400;700&display=swap" rel="stylesheet" />
+    <style>
+        @font-face { font-family: 'TAMIL-UNI003'; src: url('/TAMIL-UNI003.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI004'; src: url('/TAMIL-UNI004.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI007'; src: url('/TAMIL-UNI007.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI010'; src: url('/TAMIL-UNI010.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI018'; src: url('/TAMIL-UNI018.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI019'; src: url('/TAMIL-UNI019.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI021'; src: url('/TAMIL-UNI021.ttf') format('truetype'); }
+        @font-face { font-family: 'TAMIL-UNI024'; src: url('/TAMIL-UNI024.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil003'; src: url('/Tamil003.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil004'; src: url('/Tamil004.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil012'; src: url('/Tamil012.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil017'; src: url('/Tamil017.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil022'; src: url('/Tamil022.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil036'; src: url('/Tamil036.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil041'; src: url('/Tamil041.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil059'; src: url('/Tamil059.ttf') format('truetype'); }
+        @font-face { font-family: 'Tamil060'; src: url('/Tamil060.ttf') format('truetype'); }
+    </style>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            color: #fff;
+            font-family: 'Noto Sans Tamil', 'Inter', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        #banner {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+            min-height: 16vh;
+            box-sizing: border-box;
+            padding: 1.6vh 4vw;
+            background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.72) 28%, rgba(0,0,0,0.82) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            visibility: hidden;
+        }
+
+        body.banner-visible #banner {
+            visibility: visible;
+        }
+
+        #banner-text {
+            font-weight: 700;
+            line-height: 1.3;
+            white-space: pre-wrap;
+            max-width: 100%;
+            max-height: 100%;
+            text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.85);
+        }
+
+        #status {
+            position: absolute;
+            top: 12px;
+            right: 16px;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.4);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="banner">
+        <div id="banner-text"></div>
+    </div>
+
+    <div id="status">Connecting...</div>
+
+    <script>
+        const banner = document.getElementById('banner');
+        const bannerText = document.getElementById('banner-text');
+        const statusElement = document.getElementById('status');
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+
+        const normalizeRoomCode = (value) => {
+            const normalized = String(value || '')
+                .trim()
+                .toUpperCase()
+                .replace(/[^A-Z0-9_-]/g, '')
+                .slice(0, 24);
+            return normalized || 'DEFAULT';
+        };
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = normalizeRoomCode(urlParams.get('room') || 'default');
+
+        let ws;
+        let appPingTimer = null;
+
+        function clearPingTimer() {
+            if (appPingTimer) {
+                clearInterval(appPingTimer);
+                appPingTimer = null;
+            }
+        }
+
+        function connectWebSocket() {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                statusElement.innerText = 'Connected: ' + roomId;
+                statusElement.style.color = 'rgba(0, 255, 0, 0.5)';
+
+                ws.send(JSON.stringify({ type: 'join', room: roomId }));
+
+                clearPingTimer();
+                appPingTimer = setInterval(() => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                    ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+                }, 20000);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'lower-third') {
+                    showChunk(data.text, data.font);
+                } else if (data.type === 'clear') {
+                    hideBanner();
+                } else if (data.type === 'status' || data.type === 'error') {
+                    console.log('Server message:', data.message);
+                }
+            };
+
+            ws.onclose = () => {
+                clearPingTimer();
+                statusElement.style.display = 'block';
+                statusElement.innerText = 'Disconnected - Reconnecting...';
+                statusElement.style.color = 'rgba(255, 0, 0, 0.5)';
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+        }
+
+        function showChunk(text, font) {
+            if (!text) {
+                hideBanner();
+                return;
+            }
+
+            document.body.classList.add('banner-visible');
+
+            if (font) {
+                bannerText.style.fontFamily = font;
+            }
+
+            bannerText.innerText = text;
+            autoFit(bannerText);
+        }
+
+        function hideBanner() {
+            document.body.classList.remove('banner-visible');
+            bannerText.innerText = '';
+        }
+
+        function autoFit(element) {
+            const boxHeight = banner.clientHeight;
+            const boxWidth = banner.clientWidth;
+            if (!boxWidth || !boxHeight) return;
+
+            const maxH = boxHeight * 0.86;
+            const minPx = 14;
+            const maxPx = Math.max(minPx, Math.floor(boxHeight * 0.4));
+            let low = minPx;
+            let high = maxPx;
+            let best = minPx;
+
+            const applySize = (sizePx) => {
+                element.style.fontSize = `${sizePx}px`;
+            };
+
+            while (low <= high) {
+                const mid = Math.floor((low + high) / 2);
+                applySize(mid);
+
+                if (element.scrollHeight <= maxH) {
+                    best = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+
+            applySize(best);
+        }
+
+        window.addEventListener('resize', () => {
+            if (document.body.classList.contains('banner-visible')) autoFit(bannerText);
+        });
+
+        connectWebSocket();
+    </script>
+</body>
+</html>
