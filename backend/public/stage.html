@@ -68,7 +68,6 @@
 
         #current-text {
             font-size: 4.4vw;
-            font-weight: 700;
             line-height: 1.3;
             white-space: pre-wrap;
             max-width: 100%;
@@ -171,6 +170,13 @@
             right: 16px;
             font-size: 0.85rem;
             color: rgba(255, 255, 255, 0.3);
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        #status.controls-hidden {
+            opacity: 0;
+            pointer-events: none;
         }
 
         #fullscreen-btn {
@@ -187,6 +193,8 @@
             align-items: center;
             justify-content: center;
             z-index: 10;
+            opacity: 1;
+            transition: opacity 0.3s ease;
         }
 
         #fullscreen-btn svg {
@@ -198,6 +206,11 @@
             #fullscreen-btn.supported {
                 display: flex;
             }
+        }
+
+        #fullscreen-btn.controls-hidden {
+            opacity: 0;
+            pointer-events: none;
         }
     </style>
 </head>
@@ -294,6 +307,7 @@
         const stanzaList = document.getElementById('stanza-list');
         const statusElement = document.getElementById('status');
         const previewBanner = document.getElementById('preview-banner');
+        const currentLabel = document.getElementById('current-label');
         const fullscreenBtn = document.getElementById('fullscreen-btn');
         const fullscreenIconPath = document.getElementById('fullscreen-icon-path');
         const layoutEl = document.getElementById('layout');
@@ -344,6 +358,27 @@
                     lastTap = now;
                 }
             });
+
+            // Auto-hide the fullscreen button after 10s of inactivity, like a video player's
+            // controls — tap/move anywhere to bring it back and restart the countdown.
+            const CONTROLS_HIDE_DELAY = 10000;
+            let controlsHideTimer = null;
+
+            function showControls() {
+                fullscreenBtn.classList.remove('controls-hidden');
+                statusElement.classList.remove('controls-hidden');
+                clearTimeout(controlsHideTimer);
+                controlsHideTimer = setTimeout(() => {
+                    fullscreenBtn.classList.add('controls-hidden');
+                    statusElement.classList.add('controls-hidden');
+                }, CONTROLS_HIDE_DELAY);
+            }
+
+            document.addEventListener('touchstart', showControls, { passive: true });
+            document.addEventListener('mousemove', showControls);
+            document.addEventListener('click', showControls);
+
+            showControls();
         }
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -433,6 +468,7 @@
             currentText.style.color = '#555';
             currentText.style.fontSize = '2vw';
             previewBanner.style.display = 'none';
+            currentLabel.style.display = '';
             renderStanzaList(lastPreviews, null);
         }
 
@@ -449,12 +485,14 @@
                 // tapping the live stanza returns you to live view
                 viewingIndex = null;
                 previewBanner.style.display = 'none';
+                currentLabel.style.display = '';
                 renderCurrentText(currentIndex, lastStanzas[currentIndex] ?? currentText.innerText);
                 renderStanzaList(lastPreviews, currentIndex);
                 return;
             }
             viewingIndex = i;
             previewBanner.style.display = 'block';
+            currentLabel.style.display = 'none';
             renderCurrentText(i, lastStanzas[i] ?? '');
             renderStanzaList(lastPreviews, currentIndex);
         }
