@@ -144,6 +144,27 @@
             content: ' \2192';
         }
 
+        .stanza-row {
+            cursor: pointer;
+        }
+
+        .stanza-row.viewing {
+            opacity: 1;
+            background: rgba(217, 164, 65, 0.18);
+            border-left-color: #D9A441;
+        }
+
+        .stanza-row.viewing .idx { color: #E8BE6C; }
+
+        #preview-banner {
+            display: none;
+            font-size: 0.85rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            color: #E8BE6C;
+            margin-bottom: 1vh;
+        }
+
         #status {
             position: absolute;
             bottom: 12px;
@@ -158,6 +179,7 @@
     <div id="layout">
         <div id="current-pane">
             <div id="current-label">Now Singing</div>
+            <div id="preview-banner">Previewing — tap the current stanza to return to live</div>
             <div id="current-text" style="color:#555; font-size: 2vw;">Waiting for presentation…</div>
         </div>
         <div id="upcoming-pane">
@@ -172,6 +194,7 @@
         const currentText = document.getElementById('current-text');
         const stanzaList = document.getElementById('stanza-list');
         const statusElement = document.getElementById('status');
+        const previewBanner = document.getElementById('preview-banner');
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}`;
@@ -191,6 +214,9 @@
         let ws;
         let appPingTimer = null;
         let currentIndex = null;
+        let lastStanzas = [];
+        let viewingIndex = null;
+        let currentFont = '';
 
         function clearPingTimer() {
             if (appPingTimer) {
@@ -242,22 +268,45 @@
 
         function showStage(data) {
             currentIndex = data.index;
+            lastStanzas = data.stanzas || [];
+            currentFont = data.font || '';
+            viewingIndex = null; // a real update from the presenter always wins over a local preview
 
-            if (data.font) currentText.style.fontFamily = data.font;
-            currentText.style.color = '#fff';
-            currentText.style.fontSize = '';
-            currentText.innerText = data.text || '';
-            autoFitCurrent();
-
+            renderCurrentText(currentIndex, data.text || '');
             renderStanzaList(data.previews || [], currentIndex);
         }
 
         function clearStage() {
             currentIndex = null;
+            viewingIndex = null;
             currentText.innerText = 'Waiting for presentation…';
             currentText.style.color = '#555';
             currentText.style.fontSize = '2vw';
+            previewBanner.style.display = 'none';
             renderStanzaList(lastPreviews, null);
+        }
+
+        function renderCurrentText(index, text) {
+            if (currentFont) currentText.style.fontFamily = currentFont;
+            currentText.style.color = '#fff';
+            currentText.style.fontSize = '';
+            currentText.innerText = text || '';
+            autoFitCurrent();
+        }
+
+        function viewStanza(i) {
+            if (i === currentIndex) {
+                // tapping the live stanza returns you to live view
+                viewingIndex = null;
+                previewBanner.style.display = 'none';
+                renderCurrentText(currentIndex, lastStanzas[currentIndex] ?? currentText.innerText);
+                renderStanzaList(lastPreviews, currentIndex);
+                return;
+            }
+            viewingIndex = i;
+            previewBanner.style.display = 'block';
+            renderCurrentText(i, lastStanzas[i] ?? '');
+            renderStanzaList(lastPreviews, currentIndex);
         }
 
         let lastPreviews = [];
@@ -268,8 +317,10 @@
             previews.forEach((preview, i) => {
                 const row = document.createElement('div');
                 row.className = 'stanza-row';
-                if (i === activeIndex) row.classList.add('current');
+                if (i === viewingIndex) row.classList.add('viewing');
+                else if (i === activeIndex) row.classList.add('current');
                 else if (i === (activeIndex ?? -2) + 1) row.classList.add('next');
+                row.addEventListener('click', () => viewStanza(i));
 
                 const idx = document.createElement('div');
                 idx.className = 'idx';
@@ -284,7 +335,8 @@
                 stanzaList.appendChild(row);
             });
 
-            const activeRow = stanzaList.children[activeIndex];
+            const scrollIndex = viewingIndex !== null ? viewingIndex : activeIndex;
+            const activeRow = stanzaList.children[scrollIndex];
             if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
         }
 
@@ -315,7 +367,7 @@
         }
 
         window.addEventListener('resize', () => {
-            if (currentIndex !== null) autoFitCurrent();
+            if (currentIndex !== null || viewingIndex !== null) autoFitCurrent();
         });
 
         connectWebSocket();
