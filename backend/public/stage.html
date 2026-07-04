@@ -172,9 +172,42 @@
             font-size: 0.85rem;
             color: rgba(255, 255, 255, 0.3);
         }
+
+        #fullscreen-btn {
+            display: none;
+            position: absolute;
+            top: 12px;
+            right: 16px;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: rgba(255, 255, 255, 0.6);
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        #fullscreen-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        @media (pointer: coarse) {
+            #fullscreen-btn.supported {
+                display: flex;
+            }
+        }
     </style>
 </head>
 <body>
+
+    <button id="fullscreen-btn" aria-label="Toggle fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path id="fullscreen-icon-path" d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m11-5v3a2 2 0 0 1-2 2h-3" />
+        </svg>
+    </button>
 
     <div id="layout">
         <div id="current-pane">
@@ -191,10 +224,127 @@
     <div id="status">Connecting...</div>
 
     <script>
+    // --- Screen-saver prevention ---
+    // Strategy 1: Screen Wake Lock API (modern browsers, most reliable)
+    let wakeLock = null;
+
+    async function requestWakeLock() {
+        if (!('wakeLock' in navigator)) return false;
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; });
+            return true;
+        } catch (err) {
+            console.warn('Wake Lock request failed:', err);
+            return false;
+        }
+    }
+
+    // Re-acquire wake lock when the page becomes visible again
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && wakeLock === null) {
+            requestWakeLock();
+        }
+    });
+
+    // Strategy 2: Hidden silent video (canvas stream) – keeps browser
+    // treating the page as "active media" and suppresses the OS screensaver.
+    function startSilentVideo() {
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1;
+            canvas.height = 1;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, 1, 1);
+
+            const stream = canvas.captureStream(1); // 1 fps – barely any CPU
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.muted = true;
+            video.loop = true;
+            video.playsInline = true;
+            video.setAttribute('aria-hidden', 'true');
+            video.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
+            document.body.appendChild(video);
+            video.play().catch(err => { console.warn('Silent video play failed:', err); });
+        } catch (err) {
+            console.warn('Silent video setup failed:', err);
+        }
+    }
+
+    // Strategy 3: Periodic repaint fallback (last resort)
+    function startRepaintHeartbeat() {
+        setInterval(() => {
+            document.body.style.opacity = '0.9999';
+            setTimeout(() => { document.body.style.opacity = '1'; }, 100);
+        }, 20000);
+    }
+
+    // Boot all strategies
+    startSilentVideo();
+    requestWakeLock().then(acquired => {
+        if (!acquired) {
+            startRepaintHeartbeat();
+        }
+    });
+    </script>
+    <script>
         const currentText = document.getElementById('current-text');
         const stanzaList = document.getElementById('stanza-list');
         const statusElement = document.getElementById('status');
         const previewBanner = document.getElementById('preview-banner');
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        const fullscreenIconPath = document.getElementById('fullscreen-icon-path');
+        const layoutEl = document.getElementById('layout');
+
+        const ENTER_ICON = 'M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m11-5v3a2 2 0 0 1-2 2h-3';
+        const EXIT_ICON = 'M9 3v3a2 2 0 0 1-2 2H4M20 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3';
+
+        const fullscreenSupported = !!(
+            document.documentElement.requestFullscreen ||
+            document.documentElement.webkitRequestFullscreen
+        );
+
+        function isFullscreen() {
+            return !!(document.fullscreenElement || document.webkitFullscreenElement);
+        }
+
+        function toggleFullscreen() {
+            if (!fullscreenSupported) return;
+            if (isFullscreen()) {
+                if (document.exitFullscreen) document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+            } else {
+                const el = document.documentElement;
+                if (el.requestFullscreen) el.requestFullscreen();
+                else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+            }
+        }
+
+        function syncFullscreenIcon() {
+            fullscreenIconPath.setAttribute('d', isFullscreen() ? EXIT_ICON : ENTER_ICON);
+        }
+
+        if (fullscreenSupported) {
+            fullscreenBtn.classList.add('supported');
+            fullscreenBtn.addEventListener('click', toggleFullscreen);
+            document.addEventListener('fullscreenchange', syncFullscreenIcon);
+            document.addEventListener('webkitfullscreenchange', syncFullscreenIcon);
+
+            // Double-tap anywhere on the main pane also toggles fullscreen — easier to hit than the small button.
+            let lastTap = 0;
+            layoutEl.addEventListener('touchend', (e) => {
+                if (e.target.closest('.stanza-row')) return;
+                const now = Date.now();
+                if (now - lastTap < 350) {
+                    toggleFullscreen();
+                    lastTap = 0;
+                } else {
+                    lastTap = now;
+                }
+            });
+        }
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}`;
