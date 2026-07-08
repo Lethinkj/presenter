@@ -64,7 +64,6 @@
             white-space: pre-wrap;
             max-width: 100%;
             max-height: 100%;
-            text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.85);
         }
 
         #status {
@@ -134,7 +133,7 @@
                 const data = JSON.parse(event.data);
 
                 if (data.type === 'lower-third') {
-                    showChunk(data.text, data.font);
+                    showChunk(data.text, data.font, data.fontSize, data.fontWeight, data.shadow);
                 } else if (data.type === 'clear') {
                     hideBanner();
                 } else if (data.type === 'status' || data.type === 'error') {
@@ -155,7 +154,22 @@
             };
         }
 
-        function showChunk(text, font) {
+        // Text-shadow presets, presenter-controlled (on/off + intensity).
+        const SHADOW_PRESETS = {
+            light:  '1px 1px 3px rgba(0, 0, 0, 0.65)',
+            medium: '1px 1px 5px rgba(0, 0, 0, 0.85)',
+            heavy:  '2px 2px 8px rgba(0, 0, 0, 0.92)',
+        };
+
+        function applyTextShadow(shadow) {
+            const enabled = shadow ? shadow.enabled !== false : true;
+            const intensityKey = shadow && SHADOW_PRESETS[shadow.intensity] ? shadow.intensity : 'medium';
+            bannerText.style.textShadow = enabled ? SHADOW_PRESETS[intensityKey] : 'none';
+        }
+
+        let currentFontSizeType = 'auto';
+
+        function showChunk(text, font, fontSize, fontWeight, shadow) {
             if (!text) {
                 hideBanner();
                 return;
@@ -166,7 +180,10 @@
             if (font) {
                 bannerText.style.fontFamily = font;
             }
+            bannerText.style.fontWeight = fontWeight || 400;
+            applyTextShadow(shadow);
 
+            currentFontSizeType = fontSize || 'auto';
             bannerText.innerText = text;
             autoFit(bannerText);
         }
@@ -183,9 +200,18 @@
 
             const maxH = boxHeight * 0.86;
             const minPx = 14;
-            const maxPx = Math.max(minPx, Math.floor(boxHeight * 0.4));
+            const naturalHigh = Math.max(minPx, Math.floor(boxHeight * 0.4));
+            // For a manual size, honor the presenter-selected value as the preferred maximum,
+            // then shrink only when needed to fit the banner.
+            let cappedHigh = naturalHigh;
+            if (currentFontSizeType !== 'auto') {
+                const parsed = parseFloat(String(currentFontSizeType));
+                if (!Number.isNaN(parsed) && parsed > 0) {
+                    cappedHigh = Math.floor((window.innerWidth * parsed) / 100);
+                }
+            }
             let low = minPx;
-            let high = maxPx;
+            let high = Math.max(minPx, cappedHigh);
             let best = minPx;
 
             const applySize = (sizePx) => {

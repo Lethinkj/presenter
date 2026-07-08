@@ -402,6 +402,21 @@
         let lastStanzas = [];
         let viewingIndex = null;
         let currentFont = '';
+        let currentFontWeight = 400;
+        let currentFontSizeType = 'auto';
+
+        // Text-shadow presets, presenter-controlled (on/off + intensity).
+        const SHADOW_PRESETS = {
+            light:  '1px 1px 3px rgba(0, 0, 0, 0.5)',
+            medium: '1px 1px 5px rgba(0, 0, 0, 0.7)',
+            heavy:  '2px 2px 8px rgba(0, 0, 0, 0.85)',
+        };
+
+        function applyTextShadow(shadow) {
+            const enabled = shadow ? shadow.enabled !== false : true;
+            const intensityKey = shadow && SHADOW_PRESETS[shadow.intensity] ? shadow.intensity : 'medium';
+            currentText.style.textShadow = enabled ? SHADOW_PRESETS[intensityKey] : 'none';
+        }
 
         function clearPingTimer() {
             if (appPingTimer) {
@@ -455,6 +470,9 @@
             currentIndex = data.index;
             lastStanzas = data.stanzas || [];
             currentFont = data.font || '';
+            currentFontWeight = data.fontWeight || 400;
+            currentFontSizeType = data.fontSize || 'auto';
+            applyTextShadow(data.shadow);
             viewingIndex = null; // a real update from the presenter always wins over a local preview
 
             renderCurrentText(currentIndex, data.text || '');
@@ -474,6 +492,7 @@
 
         function renderCurrentText(index, text) {
             if (currentFont) currentText.style.fontFamily = currentFont;
+            currentText.style.fontWeight = currentFontWeight;
             currentText.style.color = '#fff';
             currentText.style.fontSize = '';
             currentText.innerText = text || '';
@@ -535,9 +554,18 @@
             if (!boxWidth || !boxHeight) return;
 
             const minPx = 20;
-            const maxPx = Math.max(minPx, Math.floor(boxHeight * 0.4));
+            const naturalMax = Math.max(minPx, Math.floor(boxHeight * 0.4));
+            // For a manual size, honor the presenter-selected value as the preferred maximum,
+            // then shrink only when needed to fit the pane.
+            let cappedMax = naturalMax;
+            if (currentFontSizeType !== 'auto') {
+                const parsed = parseFloat(String(currentFontSizeType));
+                if (!Number.isNaN(parsed) && parsed > 0) {
+                    cappedMax = Math.floor((window.innerWidth * parsed) / 100);
+                }
+            }
             let low = minPx;
-            let high = maxPx;
+            let high = Math.max(minPx, cappedMax);
             let best = minPx;
 
             while (low <= high) {

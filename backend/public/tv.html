@@ -317,7 +317,7 @@ requestWakeLock().then(acquired => {
                         document.body.classList.remove('ref-visible');
                     }
                     
-                    displayLyrics(data.text, data.fontSize, data.font);
+                    displayLyrics(data.text, data.fontSize, data.font, data.fontWeight);
                 } else if (data.type === 'present-image') {
                     const roomDisplay = document.getElementById('room-code-display');
                     if (roomDisplay) roomDisplay.style.display = 'none';
@@ -389,7 +389,7 @@ requestWakeLock().then(acquired => {
             element.classList.add('quick-fade');
         }
 
-        function displayLyrics(text, fontSize, font) {
+        function displayLyrics(text, fontSize, font, fontWeight) {
             document.body.classList.remove('image-mode');
             currentFontSizeType = fontSize || 'auto';
 
@@ -413,6 +413,7 @@ requestWakeLock().then(acquired => {
                 currentElement.style.fontFamily = font;
                 lyricsContainer.style.fontFamily = font;
             }
+            currentElement.style.fontWeight = fontWeight || 400;
 
             currentElement.innerText = text || '';
             runQuickTransition(currentElement);
