@@ -6,6 +6,8 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import SongPresentationPage from './pages/SongPresentationPage';
 import SettingsPage from './pages/SettingsPage';
 import MainPage from './pages/MainPage';
+import BrowserPage from './pages/BrowserPage';
+import { FaArrowLeft, FaCog } from 'react-icons/fa';
 import { upsertOfflineSong, bulkUpsertOfflineSongs, deleteOfflineSong } from './offlineSqlite';
 import { syncSongs } from './utils/syncManager';
 
@@ -399,6 +401,7 @@ function App() {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeTab') || 'db');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSettings, setShowSettings] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
   const [showHomeCards, setShowHomeCards] = useState(true);
   const settingsReturnRef = useRef(null);
   const settingsBackHandlerRef = useRef(null);
@@ -1615,6 +1618,10 @@ function App() {
       restoreViewFromSettings();
       return true;
     }
+    if (showBrowser) {
+      closeBrowserPage();
+      return true;
+    }
     if (selectedSong) {
       setSelectedSong(null);
       setActiveStanza(null);
@@ -1632,7 +1639,7 @@ function App() {
       return true;
     }
     return false;
-  }, [selectedSong, showSettings, showHomeCards, restoreViewFromSettings]);
+  }, [selectedSong, showSettings, showBrowser, showHomeCards, restoreViewFromSettings]);
 
   // In-app back stack: close song/settings on browser/mobile back before exiting app.
   useEffect(() => {
@@ -2384,6 +2391,10 @@ function App() {
       openSettingsPage();
       return;
     }
+    if (tabKey === 'browser') {
+      openBrowserPage();
+      return;
+    }
     setActiveTab(tabKey);
     setShowHomeCards(false);
   };
@@ -2429,6 +2440,42 @@ function App() {
     }).catch(() => alert('Could not copy link.'));
   };
 
+  // ---- Browser Import ----
+  const handleBrowserImportSong = async (title, stanzas, sourceUrl) => {
+    try {
+      const res = await axios.post(`${apiBase}/save_song`, {
+        title,
+        stanzas,
+        sourceUrl
+      });
+      const newId = res.data.songId;
+      if (newId) {
+        const cacheEntry = { id: newId, title, stanzas, source: 'db' };
+        setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
+        upsertOfflineSongSqlite(cacheEntry);
+      }
+      return { id: newId, offline: false };
+    } catch {
+      const localId = persistLocallyAndQueue({
+        title,
+        stanzas,
+        sourceUrl,
+        songId: null,
+        forceUpdate: false
+      });
+      return { id: localId, offline: true };
+    }
+  };
+
+  const openBrowserPage = () => {
+    setShowBrowser(true);
+    setShowHomeCards(false);
+  };
+
+  const closeBrowserPage = () => {
+    setShowBrowser(false);
+    setShowHomeCards(true);
+  };
   // ---- Page Rendering ----
   if (showSettings) {
     return (
@@ -2473,6 +2520,35 @@ function App() {
         NATIVE_FILE_STORAGE_ENABLED_IN_BUILD={NATIVE_FILE_STORAGE_ENABLED_IN_BUILD}
         syncProgress={syncProgress}
       />
+    );
+  }
+
+  if (showBrowser) {
+    return (
+      <div className="app-container no-header">
+        <div className="content-area">
+          <div className="section-topbar">
+            <button className="back-btn" onClick={closeBrowserPage}>
+              <FaArrowLeft />
+            </button>
+            <div className="section-title">Browser</div>
+            <div className="section-actions">
+              <button
+                className="settings-icon-btn top-settings-btn"
+                onClick={openSettingsPage}
+                title="Settings"
+                type="button"
+              >
+                <FaCog />
+              </button>
+            </div>
+          </div>
+          <BrowserPage
+            apiBase={apiBase}
+            onImportSong={handleBrowserImportSong}
+          />
+        </div>
+      </div>
     );
   }
 
