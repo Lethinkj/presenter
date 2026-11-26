@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import {
   FaSearch,
@@ -52,6 +52,19 @@ export default function BrowserPage({
     setUrl(targetUrl);
     setImportError('');
   }, []);
+
+  useEffect(() => {
+    const onMessage = (event) => {
+      if (event?.data?.type === 'browser-navigate' && typeof event.data.url === 'string') {
+        setLoadedUrl(event.data.url);
+        setUrl(event.data.url);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  const proxySrc = loadedUrl ? `${apiBase}/browse?url=${encodeURIComponent(loadedUrl)}` : '';
 
   const searchChristianSongs = useCallback(async (query) => {
     const trimmed = (query || '').trim();
@@ -223,7 +236,7 @@ export default function BrowserPage({
           <>
             <iframe
               ref={iframeRef}
-              src={loadedUrl}
+              src={proxySrc}
               className="browser-iframe"
               sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
               allow="autoplay; fullscreen"

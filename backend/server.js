@@ -134,6 +134,123 @@ app.get('/lyrics', async (req, res) => {
     }
 });
 
+const isSafePublicHttpUrl = (rawUrl) => {
+    try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+        const host = parsed.hostname.toLowerCase();
+        if (
+            host === 'localhost' ||
+            host === '::1' ||
+            host.endsWith('.local') ||
+            /^127\./.test(host) ||
+            /^10\./.test(host) ||
+            /^192\.168\./.test(host) ||
+            /^169\.254\./.test(host) ||
+            /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+        ) {
+            return false;
+        }
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+// --- In-App Browser Proxy (strips X-Frame-Options/CSP so sites open inside iframe) ---
+app.get('/browse', async (req, res) => {
+    const targetUrl = String(req.query.url || '').trim();
+    if (!targetUrl || !isSafePublicHttpUrl(targetUrl)) {
+        return res.status(400).send('Invalid or unsupported URL');
+    }
+
+    try {
+        const axios = require('axios');
+        const response = await axios.get(targetUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,ta;q=0.8'
+            },
+            timeout: 15000,
+            maxRedirects: 5,
+            responseType: 'arraybuffer',
+            validateStatus: (status) => status >= 200 && status < 400
+        });
+
+        const contentType = String(response.headers['content-type'] || 'text/html; charset=utf-8');
+        const finalUrl = response.request?.res?.responseUrl || targetUrl;
+
+        res.removeHeader('X-Frame-Options');
+        res.removeHeader('Content-Security-Policy');
+        res.setHeader('Content-Type', contentType);
+
+        if (!contentType.toLowerCase().includes('text/html')) {
+            return res.send(Buffer.from(response.data));
+        }
+
+        let html = Buffer.from(response.data).toString('utf8');
+        const safeBase = finalUrl.replace(/"/g, '&quot;');
+        const baseTag = `<base href="${safeBase}">`;
+        const helperScript = `
+<script>
+(function() {
+  var currentUrl = ${JSON.stringify(finalUrl)};
+  try { window.parent.postMessage({ type: 'browser-navigate', url: currentUrl }, '*'); } catch (e) {}
+  document.addEventListener('click', function(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var raw = a.getAttribute('href') || '';
+    if (!raw || raw.startsWith('#') || raw.startsWith('javascript:') || raw.startsWith('mailto:') || raw.startsWith('tel:')) return;
+    try {
+      var resolved = new URL(raw, currentUrl).href;
+      if (/^https?:\\/\\//i.test(resolved)) {
+        e.preventDefault();
+        window.location.href = '/browse?url=' + encodeURIComponent(resolved);
+      }
+    } catch (err) {}
+  }, true);
+  document.addEventListener('submit', function(e) {
+    var form = e.target;
+    if (!form || !form.tagName || form.tagName.toLowerCase() !== 'form') return;
+    var method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'get') return;
+    try {
+      var action = form.getAttribute('action') || currentUrl;
+      var target = new URL(action, currentUrl);
+      var data = new FormData(form);
+      data.forEach(function(val, key) { target.searchParams.set(key, String(val)); });
+      e.preventDefault();
+      window.location.href = '/browse?url=' + encodeURIComponent(target.href);
+    } catch (err) {}
+  }, true);
+})();
+</script>`;
+
+        if (/<head[^>]*>/i.test(html)) {
+            html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${baseTag}`);
+        } else {
+            html = `${baseTag}\n${html}`;
+        }
+
+        if (/<\/body>/i.test(html)) {
+            html = html.replace(/<\/body>/i, `${helperScript}\n</body>`);
+        } else {
+            html = `${html}\n${helperScript}`;
+        }
+
+        res.send(html);
+    } catch (error) {
+        console.error('Browse proxy error:', error.message);
+        res.status(502).send(`
+            <html><body style="font-family:sans-serif;background:#121212;color:#eee;padding:24px;text-align:center;">
+              <h3>Could not open website</h3>
+              <p style="opacity:0.75;">${String(error.message || 'Connection failed').replace(/</g, '&lt;')}</p>
+            </body></html>
+        `);
+    }
+});
+
 // --- REST API for Auto Save ---
 app.post('/save_song', async (req, res) => {
     const { title, stanzas, songId, sourceUrl, forceUpdate } = req.body;
