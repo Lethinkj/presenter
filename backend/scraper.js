@@ -217,9 +217,12 @@ function unwrapRedirectUrl(url) {
 function looksLikeLyricsPage(url, title) {
     const hay = `${url} ${title}`.toLowerCase();
     if (!url.startsWith('http://') && !url.startsWith('https://')) return false;
-    if (/(facebook|instagram|youtube|x\.com|twitter|wikipedia|pinterest|linkedin)\./i.test(hay)) return false;
+    if (/(facebook|instagram|youtube|x\.com|twitter|wikipedia|pinterest|linkedin|spotify|jiosaavn|gaana|wynk|raaga|genius\.com|azlyrics|lyricsmint|masstamilan|starmusiq)\./i.test(hay)) return false;
     if (/\/search|\/tag\/|\/category\/|\/author\//i.test(hay)) return false;
-    return /(lyrics|christian|song|tamil|padal|keerthanai)/i.test(hay);
+    if (/(movie|film|cinema|bollywood|kollywood|tollywood|album\s*song|item\s*song|kuthu)/i.test(hay)) return false;
+    const hasLyricsSignal = /(lyrics|song|padal|keerthanai)/i.test(hay);
+    const hasChristianSignal = /(christian|christ|jesus|yesu|karthar|devan|gospel|worship|hymn|church|choir|psalm|keerthanai|christsquare|christiansongbook|tamilchristiansongs|bible|hallelujah|amen|holy|grace|lord|saviour|savior)/i.test(hay);
+    return hasLyricsSignal && hasChristianSignal;
 }
 
 function scoreResult(item, queryTokens) {
@@ -304,8 +307,7 @@ function extractJsonLdArticleText($) {
 
 async function searchWeb(query) {
     const queryTokens = buildQueryTokens(query);
-    const hasTamil = /[\u0B80-\u0BFF]/.test(query);
-    const fullQuery = hasTamil ? `${query} lyrics` : `${query} tamil christian song lyrics`;
+    const fullQuery = `${query} christian song lyrics`;
     const { data } = await axios.get(DDG_SEARCH_URL, {
         headers: HEADERS,
         timeout: 12000,
@@ -338,12 +340,82 @@ async function searchWeb(query) {
         .slice(0, 40);
 }
 
+let christSquareSitemapCache = {
+    expiresAt: 0,
+    items: []
+};
+
+function titleFromChristSquareUrl(url) {
+    try {
+        const pathname = new URL(url).pathname;
+        const slug = pathname.replace(/^\/tamil-christian-songs\//i, '').replace(/\/+$/, '');
+        if (!slug) return '';
+        const cleanedSlug = slug
+            .replace(/-(lyrics-song-chords-ppt|song-lyrics-chords-ppt|lyrics-chords-ppt|lyrics-ppt-chords|lyrics-song|song-lyrics|lyrics)$/i, '')
+            .replace(/[-_]+/g, ' ')
+            .trim();
+        return cleanedSlug.replace(/\b\w/g, c => c.toUpperCase());
+    } catch (_) {
+        return '';
+    }
+}
+
+async function getChristSquareSitemapItems() {
+    const now = Date.now();
+    if (christSquareSitemapCache.items.length > 0 && christSquareSitemapCache.expiresAt > now) {
+        return christSquareSitemapCache.items;
+    }
+
+    const { data } = await axios.get(`${BASE_URL}/sitemap.xml`, { headers: HEADERS, timeout: 15000 });
+    const items = [];
+    const seen = new Set();
+    const matches = String(data).matchAll(/<loc>(https:\/\/www\.christsquare\.com\/tamil-christian-songs\/[^<]+)<\/loc>/gi);
+    for (const match of matches) {
+        const fullUrl = match[1].trim();
+        const isIndexPage = fullUrl === `${BASE_URL}/tamil-christian-songs/` || fullUrl === `${BASE_URL}/tamil-christian-songs`;
+        if (!fullUrl || isIndexPage || seen.has(fullUrl)) continue;
+        seen.add(fullUrl);
+        const title = titleFromChristSquareUrl(fullUrl);
+        if (title) {
+            items.push({ title, url: fullUrl });
+        }
+    }
+
+    if (items.length > 0) {
+        christSquareSitemapCache = {
+            expiresAt: now + 6 * 60 * 60 * 1000,
+            items
+        };
+    }
+    return items;
+}
+
 async function searchChristSquare(query) {
+    const queryTokens = buildQueryTokens(query);
+    const results = [];
+
+    try {
+        const sitemapItems = await getChristSquareSitemapItems();
+        for (let i = 0; i < sitemapItems.length; i += 1) {
+            const item = sitemapItems[i];
+            if (passesQuery(item.title, queryTokens, query)) {
+                results.push({
+                    id: makeId('web-cs', i),
+                    title: item.title,
+                    url: item.url,
+                    site: 'christsquare'
+                });
+            }
+            if (results.length >= 60) break;
+        }
+        if (results.length > 0) return results;
+    } catch (err) {
+        console.warn(`[scraper] ChristSquare sitemap search failed: ${err.message}`);
+    }
+
     const url = `${BASE_URL}/?s=${encodeURIComponent(query)}`;
     const { data } = await axios.get(url, { headers: HEADERS, timeout: 12000 });
     const $ = cheerio.load(data);
-    const results = [];
-    const queryTokens = buildQueryTokens(query);
 
     $('a[href*="/tamil-christian-songs/"]').each((i, el) => {
         const href = $(el).attr('href');
@@ -421,21 +493,22 @@ async function searchChristianSongBook(query) {
 }
 
 async function searchTamilChristianSongs(query) {
-    const searchUrl = `${TCS_BASE_URL}/?s=${encodeURIComponent(query)}`;
+    const searchUrl = `${TCS_BASE_URL}/search/?q=${encodeURIComponent(query)}`;
     const { data } = await axios.get(searchUrl, { headers: HEADERS, timeout: 12000 });
     const $ = cheerio.load(data);
     const results = [];
     const queryTokens = buildQueryTokens(query);
 
-    $('.entry-title a, article h2 a, article h3 a, .search-results a[href]').each((i, el) => {
+    $('.entry-title a, article h2 a, article h3 a, .search-results a[href], a[href*="/lyrics/"]').each((i, el) => {
         const href = $(el).attr('href');
-        let title = $(el).text().trim();
+        let title = $(el).text().replace(/\s+/g, ' ').trim();
         const fullUrl = absoluteUrl(TCS_BASE_URL, href);
 
         if (!title || !fullUrl) return;
         if (!/\/lyrics\//i.test(fullUrl)) return;
+        if (/\/lyrics\/([a-z0-9-]+\/)?$/i.test(fullUrl) && /\/lyrics\/([a-z]\/)?$/i.test(fullUrl)) return;
         title = cleanTitle(title);
-        if (!passesQuery(title, queryTokens, query)) return;
+        if (!title || !passesQuery(title, queryTokens, query)) return;
         if (results.some(r => r.url === fullUrl)) return;
 
         results.push({

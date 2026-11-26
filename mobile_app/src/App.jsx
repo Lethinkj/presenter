@@ -2526,7 +2526,7 @@ function App() {
   if (showBrowser) {
     return (
       <div className="app-container no-header">
-        <div className="content-area">
+        <div className="content-area browser-content-area">
           <div className="section-topbar">
             <button className="back-btn" onClick={closeBrowserPage}>
               <FaArrowLeft />
