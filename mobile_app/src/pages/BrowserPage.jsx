@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import axios from 'axios';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import {
   FaSearch,
   FaDownload,
@@ -11,6 +12,8 @@ import {
   FaExternalLinkAlt,
   FaMusic
 } from 'react-icons/fa';
+
+const NativeLyricsBrowser = registerPlugin('NativeLyricsBrowser');
 
 export default function BrowserPage({
   apiBase,
@@ -92,9 +95,37 @@ export default function BrowserPage({
     }
   }, [apiBase]);
 
+  const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+
+  const launchNativeBrowser = useCallback(async (targetUrl) => {
+    try {
+      setImportError('');
+      const res = await NativeLyricsBrowser.open({ url: targetUrl });
+      if (res?.imported && Array.isArray(res.stanzas) && res.stanzas.length > 0) {
+        const cleanStanzas = res.stanzas.map(s => String(s || '').trim()).filter(Boolean);
+        if (cleanStanzas.length > 0) {
+          setImportData({ stanzas: cleanStanzas, url: res.url || targetUrl });
+          setImportTitle(String(res.title || '').trim());
+        }
+      }
+    } catch (err) {
+      setImportError(err?.message || 'Failed to open native browser');
+    }
+  }, []);
+
   const navigate = useCallback((input) => {
     const trimmed = (input || '').trim();
     if (!trimmed) return;
+
+    if (isNativeAndroid) {
+      const targetUrl = isUrl(trimmed)
+        ? (/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+        : `https://www.google.com/search?q=${encodeURIComponent(
+            trimmed.toLowerCase().includes('christian') ? trimmed : `${trimmed} christian song lyrics`
+          )}`;
+      launchNativeBrowser(targetUrl);
+      return;
+    }
 
     if (isUrl(trimmed)) {
       const targetUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
@@ -102,7 +133,7 @@ export default function BrowserPage({
     } else {
       searchChristianSongs(trimmed);
     }
-  }, [openUrl, searchChristianSongs]);
+  }, [isNativeAndroid, launchNativeBrowser, openUrl, searchChristianSongs]);
 
   const handleGo = () => {
     navigate(url);
@@ -182,14 +213,9 @@ export default function BrowserPage({
     setImportError('');
 
     try {
-      const result = await onImportSong(importTitle.trim(), importData.stanzas, importData.url);
+      await onImportSong(importTitle.trim(), importData.stanzas, importData.url);
       setImportData(null);
       setImportTitle('');
-      if (result?.offline) {
-        alert(`Song saved offline as ${result.id}. It will sync when connection is available.`);
-      } else {
-        alert(`✅ "${importTitle.trim()}" imported and saved successfully!`);
-      }
     } catch (err) {
       setImportError(err.message || 'Failed to save song');
     } finally {
@@ -327,6 +353,14 @@ export default function BrowserPage({
               Search Christian song lyrics or enter a Christian songbook URL
             </p>
             <div className="browser-quick-links">
+              {isNativeAndroid && (
+                <button
+                  onClick={() => launchNativeBrowser('https://www.google.com/search?q=tamil+christian+song+lyrics')}
+                  className="browser-quick-link"
+                >
+                  🌐 Open Chrome-Engine Browser
+                </button>
+              )}
               <button onClick={() => navigate('christiansongbook.org')} className="browser-quick-link">
                 christiansongbook.org
               </button>

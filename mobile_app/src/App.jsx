@@ -2442,29 +2442,45 @@ function App() {
 
   // ---- Browser Import ----
   const handleBrowserImportSong = async (title, stanzas, sourceUrl) => {
+    let savedId = null;
+    let isOffline = false;
+
     try {
       const res = await axios.post(`${apiBase}/save_song`, {
         title,
         stanzas,
         sourceUrl
       });
-      const newId = res.data.songId;
-      if (newId) {
-        const cacheEntry = { id: newId, title, stanzas, source: 'db' };
-        setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
+      savedId = res.data.songId;
+      if (savedId) {
+        const cacheEntry = { id: savedId, title, stanzas, source: 'db' };
+        setOfflineCache(prev => ({ ...prev, [savedId]: cacheEntry }));
         upsertOfflineSongSqlite(cacheEntry);
       }
-      return { id: newId, offline: false };
     } catch {
-      const localId = persistLocallyAndQueue({
+      savedId = persistLocallyAndQueue({
         title,
         stanzas,
         sourceUrl,
         songId: null,
         forceUpdate: false
       });
-      return { id: localId, offline: true };
+      isOffline = true;
     }
+
+    setShowBrowser(false);
+    setShowHomeCards(false);
+    setActiveStanza(null);
+    setSelectedSong({
+      id: savedId,
+      url: sourceUrl,
+      title,
+      stanzas,
+      isCached: true
+    });
+    window.history.pushState({ appView: 'song' }, '');
+
+    return { id: savedId, offline: isOffline };
   };
 
   const openBrowserPage = () => {
