@@ -6,6 +6,8 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import SongPresentationPage from './pages/SongPresentationPage';
 import SettingsPage from './pages/SettingsPage';
 import MainPage from './pages/MainPage';
+import BrowserPage from './pages/BrowserPage';
+import { FaArrowLeft, FaCog } from 'react-icons/fa';
 import { initOfflineSqlite, loadOfflineSongs, upsertOfflineSong, bulkUpsertOfflineSongs, deleteOfflineSong } from './offlineSqlite';
 
 // Supabase
@@ -117,10 +119,11 @@ const loadTabSearchState = () => {
       favorites: parsed.favorites || '',
       images: parsed.images || '',
       bible: parsed.bible || '',
-      recents: parsed.recents || ''
+      recents: parsed.recents || '',
+      browser: parsed.browser || ''
     };
   } catch {
-    return { db: '', web: '', favorites: '', images: '', bible: '', recents: '' };
+    return { db: '', web: '', favorites: '', images: '', bible: '', recents: '', browser: '' };
   }
 };
 
@@ -517,6 +520,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSettings, setShowSettings] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
   const [showHomeCards, setShowHomeCards] = useState(true);
   const settingsReturnRef = useRef(null);
 
@@ -1864,6 +1868,10 @@ function App() {
       restoreViewFromSettings();
       return true;
     }
+    if (showBrowser) {
+      closeBrowserPage();
+      return true;
+    }
     if (selectedSong) {
       setSelectedSong(null);
       setActiveStanza(null);
@@ -1876,7 +1884,7 @@ function App() {
       return true;
     }
     return false;
-  }, [selectedSong, showSettings, showHomeCards, restoreViewFromSettings]);
+  }, [selectedSong, showSettings, showBrowser, showHomeCards, restoreViewFromSettings]);
 
   // In-app back stack: close song/settings on browser/mobile back before exiting app.
   useEffect(() => {
@@ -1963,7 +1971,7 @@ function App() {
   // ---- Search ----
   const handleSearch = async () => {
     const searchQuery = tabSearch[activeTab] || '';
-    if (activeTab === 'images' || activeTab === 'bible') { setResults([]); return; }
+    if (activeTab === 'images' || activeTab === 'bible' || activeTab === 'browser') { setResults([]); return; }
     if (activeTab === 'favorites') { setResults(favorites); return; }
     if (activeTab === 'recents') {
       if (!searchQuery.trim()) {
@@ -2850,7 +2858,7 @@ function App() {
   };
 
   const clearLocalSearchCache = () => {
-    setTabSearch({ db: '', web: '', favorites: '', images: '', bible: '', recents: '' });
+    setTabSearch({ db: '', web: '', favorites: '', images: '', bible: '', recents: '', browser: '' });
     setResults([]);
     setSelectedLetter(null);
   };
@@ -2858,6 +2866,10 @@ function App() {
   const openHomeCard = (tabKey) => {
     if (tabKey === 'settings') {
       openSettingsPage();
+      return;
+    }
+    if (tabKey === 'browser') {
+      openBrowserPage();
       return;
     }
     setActiveTab(tabKey);
@@ -2962,6 +2974,43 @@ function App() {
     } finally { setAddSaving(false); }
   };
 
+  // ---- Browser Import ----
+  const handleBrowserImportSong = async (title, stanzas, sourceUrl) => {
+    try {
+      const res = await axios.post(`${apiBase}/save_song`, {
+        title,
+        stanzas,
+        sourceUrl
+      });
+      const newId = res.data.songId;
+      if (newId) {
+        const cacheEntry = { id: newId, title, stanzas, source: 'db' };
+        setOfflineCache(prev => ({ ...prev, [newId]: cacheEntry }));
+        upsertOfflineSongSqlite(cacheEntry);
+      }
+      return { id: newId, offline: false };
+    } catch {
+      const localId = persistLocallyAndQueue({
+        title,
+        stanzas,
+        sourceUrl,
+        songId: null,
+        forceUpdate: false
+      });
+      return { id: localId, offline: true };
+    }
+  };
+
+  const openBrowserPage = () => {
+    setShowBrowser(true);
+    setShowHomeCards(false);
+  };
+
+  const closeBrowserPage = () => {
+    setShowBrowser(false);
+    setShowHomeCards(true);
+  };
+
   // ---- Page Rendering ----
   if (showSettings) {
     return (
@@ -3005,6 +3054,35 @@ function App() {
         NATIVE_FILE_STORAGE_ENABLED_IN_BUILD={NATIVE_FILE_STORAGE_ENABLED_IN_BUILD}
         clearLocalSearchCache={clearLocalSearchCache}
       />
+    );
+  }
+
+  if (showBrowser) {
+    return (
+      <div className="app-container no-header">
+        <div className="content-area">
+          <div className="section-topbar">
+            <button className="back-btn" onClick={closeBrowserPage}>
+              <FaArrowLeft />
+            </button>
+            <div className="section-title">Browser</div>
+            <div className="section-actions">
+              <button
+                className="settings-icon-btn top-settings-btn"
+                onClick={openSettingsPage}
+                title="Settings"
+                type="button"
+              >
+                <FaCog />
+              </button>
+            </div>
+          </div>
+          <BrowserPage
+            apiBase={apiBase}
+            onImportSong={handleBrowserImportSong}
+          />
+        </div>
+      </div>
     );
   }
 

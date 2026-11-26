@@ -1,6 +1,7 @@
 import {
   FaArrowLeft,
   FaBook,
+  FaCompass,
   FaDatabase,
   FaGlobe,
   FaHistory,
@@ -150,6 +151,7 @@ export default function MainPage({
   const homeCards = [
     { key: 'db', label: 'DB Search', icon: <FaDatabase /> },
     { key: 'web', label: 'Web Search', icon: <FaGlobe /> },
+    { key: 'browser', label: 'Browser', icon: <FaCompass /> },
     { key: 'bible', label: 'Bible', icon: <FaBook /> },
     { key: 'favorites', label: 'Favorites', icon: <FaStar /> },
     { key: 'recents', label: 'Recents', icon: <FaHistory /> },
